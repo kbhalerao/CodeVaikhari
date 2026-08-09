@@ -18,6 +18,12 @@ the queue**. Two pids in the trace means two daemons — an `flock` on
 auto-starts a daemon when it cannot connect, and a restart leaves a ~14 s
 window with no socket.
 
+One pid in the trace means the daemon is innocent, and the other voice came
+from the browser: the inbox players are plain `<audio>` elements that decode
+in the tab, so no daemon-side queue can serialise them. The page pauses its
+other players and holds the daemon off via `/api/floor` for the clip's
+remaining seconds. Check that a click on play still POSTs it.
+
 ## One session speaking in two voices
 
 `voice_for_project()` is the single source of truth, cached in the `voices`

@@ -43,6 +43,14 @@ Break these and the thing stops being useful:
    `VAIKHARI_TRACE=1` logs every playback start and end with pid and thread.
    Overlap cannot be diagnosed after the fact; reach for this first.
 
+   The queue cannot see the third audio path: the inbox `<audio>` players
+   decode in the browser and never reach this process, so two of them, or one
+   of them against a preview, used to talk over each other with the daemon
+   perfectly serial the whole time. The page pauses its other players and
+   POSTs `/api/floor` with the clip's remaining seconds; `gap()` waits that
+   out. The hold is bounded and carries its own expiry, so a tab that dies
+   mid-clip frees the floor on its own.
+
 3. **A voice is a lookup, not an allocation.** `voice_for_project()` is the
    single source of truth, cached in the `voices` table and sticky. Do not
    re-derive a voice anywhere else; that bug shipped twice and both times the

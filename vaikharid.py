@@ -124,15 +124,24 @@ _drain_pending = 0
 _last_play_end = 0.0
 _last_manual = {}
 _last_auto = {}
+_floor_until = 0.0
 
 
 def gap():
     """Hold the floor between utterances. Enforced as a minimum interval since
     the last playback ended, not a blanket sleep, so a quiet system still
-    speaks immediately and only back-to-back messages get spaced."""
-    remaining = GAP - (time.time() - _last_play_end)
-    if remaining > 0:
-        time.sleep(remaining)
+    speaks immediately and only back-to-back messages get spaced.
+
+    Also waits out a browser holding the floor. The inbox player decodes in the
+    tab, so it is the one audio path into these speakers that the queue cannot
+    see; polled rather than slept through, because the hold can be extended or
+    released while we are already waiting."""
+    while True:
+        remaining = max(GAP - (time.time() - _last_play_end),
+                        _floor_until - time.time())
+        if remaining <= 0:
+            return
+        time.sleep(min(remaining, 0.25))
 
 
 def trace(msg):
@@ -654,6 +663,22 @@ def stop_current():
             _current.kill()
 
 
+def hold_floor(seconds):
+    """A browser tab claims the speakers for `seconds`, or releases them at 0.
+
+    The inbox player is a plain <audio> element: it never reaches this process,
+    so the job queue cannot serialise it. Clicking play is deliberate, so it
+    wins over a notification already speaking. Bounded, and the tab sends the
+    clip's remaining time, so a tab that dies mid-clip frees the floor anyway."""
+    global _floor_until
+    if seconds:
+        _floor_until = time.time() + min(float(seconds), 300)
+        stop_current()
+    else:
+        _floor_until = 0.0
+    return round(max(0.0, _floor_until - time.time()), 1)
+
+
 def worker():
     """Single consumer: overlapping notifications queue up instead of talking
     over each other."""
@@ -992,6 +1017,11 @@ class UI(BaseHTTPRequestHandler):
         if self.path == "/api/drain":
             queue_drain()
             return self._send(200, "application/json", b'{"ok":true}')
+        if self.path == "/api/floor":
+            n = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(n) or b"{}")
+            return self._send(200, "application/json", json.dumps(
+                {"held": hold_floor(body.get("seconds") or 0)}).encode())
         if self.path == "/api/mute":
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n) or b"{}")

@@ -302,7 +302,7 @@ function card(m, pending) {
     </div>
     <div class="body">${esc(m.text)}</div>
     <audio controls preload="none" src="/audio/${m.id}.wav"
-           onplay="fetch('/api/heard/${m.id}',{method:'POST'})"></audio>
+           data-id="${m.id}" data-dur="${m.dur}"></audio>
     <div class="acts">
       ${pending ? `<button class="dismiss" onclick="dismiss(this,'${m.id}')">Dismiss</button>` : ''}
       <button class="del" onclick="del(this,'${m.id}')" title="Delete permanently">delete</button>
@@ -387,6 +387,24 @@ async function preview(voice, project, el) {
     {voice, text: `This is the ${project} session speaking.`});
   return el ? busy(el, call) : call();
 }
+
+// These players decode in the browser, so the daemon's queue never sees them:
+// serialising them is this page's job. One plays at a time here, and the
+// daemon is told to hold off for whatever is left of the clip. Delegated with
+// capture because media events do not bubble, and the cards get re-rendered.
+const playing = () => [...document.querySelectorAll('audio')].some(a => !a.paused);
+const hold = a => post('/api/floor', {seconds: (+a.dataset.dur || 0) - a.currentTime + 1});
+const release = () => { if (!playing()) post('/api/floor', {seconds: 0}); };
+document.addEventListener('play', e => {
+  document.querySelectorAll('audio').forEach(o => { if (o !== e.target) o.pause(); });
+  post('/api/heard/' + e.target.dataset.id);
+  hold(e.target);
+}, true);
+// pause() above fires asynchronously, so a release always re-checks rather
+// than assuming this element is the only one that could be playing.
+document.addEventListener('pause', release, true);
+document.addEventListener('ended', release, true);
+document.addEventListener('seeked', e => { if (!e.target.paused) hold(e.target); }, true);
 
 $('mute').onclick = async () => {
   const on = $('mute').classList.contains('on');
