@@ -36,7 +36,11 @@ def last_assistant_text(path):
     except (OSError, TypeError):
         return ""
 
-    fallback = ""
+    # Claude Code writes one row per content block, so text and tool_use are
+    # never in the same row. What marks text as a preamble ("Let me check X")
+    # rather than a conclusion is a tool_use row appearing *after* it. So walk
+    # back over assistant rows and take whichever comes first: hit a tool_use
+    # and the turn was still working, so there is no conclusion to read.
     for line in reversed(lines):
         try:
             row = json.loads(line)
@@ -47,19 +51,17 @@ def last_assistant_text(path):
         content = row.get("message", {}).get("content", [])
         if not isinstance(content, list):
             continue
-        texts = [c.get("text", "") for c in content
-                 if isinstance(c, dict) and c.get("type") == "text"]
-        joined = "\n".join(t for t in texts if t.strip()).strip()
-        if not joined:
-            continue
-        # Text alongside a tool_use is mid-turn narration ("Let me check X"),
-        # not a conclusion. The closing message is text only.
-        if any(isinstance(c, dict) and c.get("type") == "tool_use"
-               for c in content):
-            fallback = fallback or joined
-            continue
-        return joined
-    return fallback
+        kinds = {c.get("type") for c in content if isinstance(c, dict)}
+        if "tool_use" in kinds:
+            return ""
+        if "text" in kinds:
+            joined = "\n".join(
+                c.get("text", "") for c in content
+                if isinstance(c, dict) and c.get("type") == "text").strip()
+            if joined:
+                return joined
+        # 'thinking' and empty rows: keep walking back
+    return ""
 
 
 def speakable(md):

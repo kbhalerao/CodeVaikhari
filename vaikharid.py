@@ -49,6 +49,10 @@ GAP = float(os.environ.get("VAIKHARI_GAP", "3.0"))   # silence between utterance
 # deliberate this recently. Claude summarising its own work and then a hook
 # announcing the same conclusion is the same news twice.
 AUTO_WINDOW = float(os.environ.get("VAIKHARI_AUTO_WINDOW", "120"))
+# An identical hook message repeated inside this window is dropped. Claude Code
+# re-emits "is waiting for your input" while it sits idle; hearing it five
+# times tells you nothing the first one did not.
+AUTO_DEDUP = float(os.environ.get("VAIKHARI_AUTO_DEDUP", "600"))
 
 # All 28 English voices, ordered by two criteria at once: the model card's
 # quality grade (best first, so a handful of sessions all get good voices) and
@@ -104,6 +108,7 @@ _db = None
 _last_repeat = 0.0
 _last_play_end = 0.0
 _last_manual = {}
+_last_auto = {}
 
 
 def gap():
@@ -544,6 +549,7 @@ def repeater():
     """Re-speak the inbox on an interval so a message you missed does not sit
     there silently. Paused while muted — mute means do not make noise, and a
     reminder is still noise."""
+    global _last_repeat
     while True:
         time.sleep(15)
         try:
@@ -560,6 +566,10 @@ def repeater():
             if time.time() - max(_last_repeat, newest) < p["repeat_minutes"] * 60:
                 continue
             log(f"repeating {pending_count()} undismissed")
+            # Stamp before enqueueing, not after draining. A drain can take
+            # minutes; without this the 15s poll queues another drain, and
+            # another, for as long as the first one is still speaking.
+            _last_repeat = time.time()
             submit({"kind": "drain"})
         except Exception as exc:
             log(f"repeater: {type(exc).__name__}: {exc}")
@@ -697,10 +707,17 @@ def handle(conn):
         # when playback *ends*, so a manual message still being spoken would
         # not be visible yet and the hook right behind it would slip through.
         if req.get("auto"):
-            since = time.time() - _last_manual.get(label, 0)
+            now = time.time()
+            since = now - _last_manual.get(label, 0)
             if since < AUTO_WINDOW:
                 log(f"suppressed auto for {label} ({since:.0f}s after a manual)")
                 return reply({"ok": True, "suppressed": True})
+            prev_text, prev_ts = _last_auto.get(label, (None, 0))
+            if prev_text == req.get("text", "") and now - prev_ts < AUTO_DEDUP:
+                log(f"suppressed repeat auto for {label} "
+                    f"({now - prev_ts:.0f}s since the same message)")
+                return reply({"ok": True, "suppressed": True})
+            _last_auto[label] = (req.get("text", ""), now)
         else:
             _last_manual[label] = time.time()
 

@@ -226,8 +226,17 @@ In practice that turns *"agwx2026 finished"* into *"Done. Nine branches
 deleted across both repos, all verified merged first. agwx is now clean."*
 
 Because agents lead with the result, the first sentence is almost always the
-useful one. It falls back to "*project* finished" only when there is genuinely
-no prose to read.
+useful one.
+
+Preambles are not conclusions. "Let me check whether that stuck" is text, but
+a tool call follows it, so it is not what you want read out. Transcripts store
+one content block per row, so the hook walks back over assistant rows and
+stops at the first `tool_use` it meets — if the turn was still working there
+is no conclusion yet, and it falls back to "*project* finished".
+
+Identical hook messages inside 10 minutes (`VAIKHARI_AUTO_DEDUP`) are dropped
+too. Claude Code re-emits "is waiting for your input" while it sits idle, and
+hearing it five times tells you nothing the first one did not.
 
 ### Always naming the project
 
@@ -266,6 +275,7 @@ Read by both client and daemon:
 | `VAIKHARI_UI_PORT` | UI port (8765) |
 | `VAIKHARI_GAP` | silence between utterances, seconds (3.0) |
 | `VAIKHARI_AUTO_WINDOW` | suppress a hook message this long after a manual one (120s) |
+| `VAIKHARI_AUTO_DEDUP` | suppress an identical hook message within this long (600s) |
 | `VAIKHARI_SOCKET` | socket path |
 | `VAIKHARI_VENV` | venv location |
 

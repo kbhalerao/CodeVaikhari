@@ -80,6 +80,12 @@ Break these and the thing stops being useful:
 - **The env var is `CLAUDE_CODE_SESSION_ID`.** Not `CLAUDE_SESSION_ID`, which
   is never set.
 
+- **Claude Code transcripts hold one content block per row.** Text and
+  `tool_use` are never in the same row, so "does this row also have a tool
+  call" can never distinguish a preamble from a conclusion. What marks text as
+  a preamble is a `tool_use` row appearing *after* it. `claude-notify.py`
+  walks back over assistant rows and stops at whichever comes first.
+
 - **Avatars are optional.** `avatars/` is committed, but the UI falls back to
   an SVG monogram per voice, so never assume a file exists. The daemon tells
   the page which ones it actually found.
