@@ -4,7 +4,8 @@
   say "build finished"            fire and forget
   echo hi | say                   read stdin
   say -w "done"                   block until playback ends
-  say -S <id> --cwd <dir> "hi"   speak as a session (auto-registers a voice)
+  say -S <id> --cwd <dir> "hi"   speak as a specific session
+                                  (inside Claude Code this is automatic)
   say -v bm_george "hello"        override the voice
   say --mute / --unmute           global mute; muted messages queue in the inbox
   say --inbox                     speak the inbox now
@@ -111,8 +112,14 @@ def send(req):
 
 def main(argv):
     voice = os.environ.get("VAIKHARI_VOICE")
-    session = os.environ.get("VAIKHARI_SESSION", "")
+    # Claude Code exports the session id to everything it runs, so a bare
+    # `say "done"` inside a session attributes to that session rather than
+    # falling back to a generic voice. Without this the Stop hook (which does
+    # pass the id) and a direct call from the same session spoke differently.
+    session = (os.environ.get("VAIKHARI_SESSION")
+               or os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
     speed, wait, out, words, action, cwd = 1.0, False, None, [], None, None
+    explicit_cwd = False
     i = 0
     # Parse everything before acting, so flag order never matters
     # (`say --inbox -w` and `say -w --inbox` mean the same thing).
@@ -125,7 +132,7 @@ def main(argv):
         elif a in ("-S", "--session"):
             i += 1; session = argv[i]
         elif a == "--cwd":
-            i += 1; cwd = argv[i]
+            i += 1; cwd = argv[i]; explicit_cwd = True
         elif a in ("-w", "--wait"):
             wait = True
         elif a in ("-o", "--out"):
@@ -182,12 +189,12 @@ def main(argv):
             print(f"  {state} {s['label']:<20} {s['voice']:<12} {s['cwd']}")
         return 0
     if action == "--register":
-        r = send({"register": {"sid": session or os.environ.get("CLAUDE_SESSION_ID", ""),
+        r = send({"register": {"sid": session,
                                "cwd": " ".join(words) or os.getcwd()}})
         print(f"{r['label']} -> {r['voice']}")
         return 0
     if action == "--unregister":
-        key = session or os.environ.get("CLAUDE_SESSION_ID") or os.getcwd()
+        key = session or os.getcwd()
         r = send({"unregister": key})
         print(f"released {r.get('freed', 0)} session(s)")
         return 0
@@ -214,8 +221,10 @@ def main(argv):
     text = (" ".join(words) if words else sys.stdin.read()).strip()
     if not text:
         return 0
+    # Always tell the daemon where we are: an unregistered session can then
+    # self-register, and a plain shell call still lands on the project's voice.
     send({"text": text, "voice": voice, "speed": speed, "session": session,
-          "cwd": cwd, "wait": wait, "out": out})
+          "cwd": cwd if explicit_cwd else os.getcwd(), "wait": wait, "out": out})
     return 0
 
 

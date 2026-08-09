@@ -103,8 +103,20 @@ voice always means one repo, which is the point of hearing which session
 spoke. Two sessions in the same repo therefore sound alike — they are the same
 project, and the label (`farmworth.a3f1`) tells them apart in the UI.
 
-A session that speaks without having registered self-registers from its
-`cwd`, so sessions predating the hooks still get the right voice.
+### Attribution
+
+The client works out who is speaking on its own, so a bare `say "done"` sounds
+like the session it was run from:
+
+| Where `say` runs | Attributed to |
+|---|---|
+| Inside Claude Code | that session, via `CLAUDE_CODE_SESSION_ID` |
+| A plain shell in a repo | that project, via `cwd` |
+| Anywhere else | `cli`, default voice |
+
+`-S` and `--cwd` override both. A session that speaks without having
+registered self-registers from its `cwd`, so sessions predating the hooks
+still get the right voice.
 
 On startup the daemon releases sessions older than 24h whose `SessionEnd`
 never fired, so a crashed session does not hold a slot forever.

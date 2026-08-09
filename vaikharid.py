@@ -329,6 +329,11 @@ def resolve_session(key, cwd=None):
     That keeps voices consistent instead of re-deriving a different one per
     utterance."""
     if not key:
+        # No session id, but we know the directory: attribute to the project
+        # so a shell `say` in a repo matches that repo's voice.
+        if cwd:
+            project = os.path.basename(cwd.rstrip("/")) or "cli"
+            return project, voice_for_project(project)
         return "cli", DEFAULT_VOICE
     with _db_lock:
         row = db().execute(
