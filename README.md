@@ -229,6 +229,16 @@ Because agents lead with the result, the first sentence is almost always the
 useful one. It falls back to "*project* finished" only when there is genuinely
 no prose to read.
 
+### Always naming the project
+
+Every spoken message is prefixed with its project — *"CodeVaikhari: branches
+cleaned in both repos"* — including a bare `say "done"` from a shell. The
+voice identifies the project too, but only once you have learned the voices,
+and a message you cannot place is not much better than no message.
+
+The daemon adds it, not the hooks, so it applies to everything. Text that
+already starts with the project name is left alone.
+
 ### Not saying it twice
 
 Hook messages are sent with `--auto`, which means *skippable*. If the session

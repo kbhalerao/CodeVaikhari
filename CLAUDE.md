@@ -56,6 +56,9 @@ Break these and the thing stops being useful:
    window is tracked in `_last_manual` at enqueue time, not read from the
    utterances table, because rows are written when playback ends.
 
+9. **The daemon prefixes the project name onto everything it speaks.** Do
+   not also prefix in the hooks or callers — it gets said twice.
+
 ## Gotchas
 
 - **`pkill -f vaikharid` matches its own shell** when the pattern appears in

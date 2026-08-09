@@ -704,8 +704,18 @@ def handle(conn):
         else:
             _last_manual[label] = time.time()
 
+        # Always name the project aloud. The voice identifies it too, but only
+        # once you have learned the voices, and a message you cannot place is
+        # not much better than no message. Done here rather than in the hooks
+        # so a bare `say "done"` gets it as well.
+        text = req.get("text", "")
+        project = label.split(".")[0]
+        if (project and project != "cli"
+                and not text.lower().startswith(project.lower())):
+            text = f"{project}: {text}"
+
         submit({
-            "text": req.get("text", ""),
+            "text": text,
             "session": label,
             "voice": req.get("voice") or voice,
             "speed": float(req.get("speed") or 1.0),

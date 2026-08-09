@@ -99,9 +99,10 @@ def main():
     sid_full = ev.get("session_id") or ""
 
     if ev.get("hook_event_name") == "Stop":
+        # The daemon prefixes the project name onto everything it speaks, so
+        # do not add it here or it gets said twice.
         summary = speakable(last_assistant_text(ev.get("transcript_path")))
-        # Fall back only when there is genuinely nothing to say.
-        text = f"{project}: {summary}" if summary else f"{project} finished"
+        text = summary or "finished"
     else:
         # Notification messages are things like "Claude needs your permission
         # to use Bash" — strip the redundant prefix, we know who is talking.
@@ -110,7 +111,7 @@ def main():
             if msg.startswith(prefix):
                 msg = msg[len(prefix):]
                 break
-        text = f"{project}: {msg}"
+        text = msg
 
     try:
         # --auto: if this session already said something deliberate, the
