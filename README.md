@@ -119,9 +119,17 @@ like the session it ran in:
 ### Avatars
 
 Kokoro ships no artwork for its voices — they are style tensors, not
-characters — so the UI derives one: hue hashed from the voice name, monogram
-from its given name, an inner ring for British voices. Deterministic, so a
-voice always looks the same, and no assets to ship.
+characters — so `avatars/` holds one flat-vector portrait per voice,
+generated once with FLUX.1 [schnell] (Apache-2.0) and committed. All 28 come
+to 38 KB, so a clone needs no image model and no Cloudflare account.
+
+Regenerate or restyle them with `tools/generate-avatars.py` (needs a
+Cloudflare token with Workers AI write, or a current `wrangler login`). Seeds
+are derived from the voice name, so a rerun reproduces the same faces.
+
+Any voice without a file falls back to a generated SVG monogram — hue hashed
+from the name, initial of its given name, an inner ring for British voices —
+so deleting `avatars/` degrades cleanly rather than breaking the UI.
 
 ## Repeat
 
@@ -229,6 +237,16 @@ directly: `pw-play --format=s16 --rate=24000 --channels=1 - < /dev/zero`.
 
 **Logs.** `journalctl --user -u vaikhari -f`, or
 `~/.local/state/vaikhari/daemon.log` when started without systemd.
+
+## Remote access
+
+Reaching the inbox from a phone is designed but not built. See
+[docs/REMOTE.md](docs/REMOTE.md) for the sketch: the prerequisites that apply
+under any transport (auth, bind config, PWA shell), the transport options,
+Web Push, and away mode.
+
+The one hard rule from it: **the HTTP server has no authentication today** and
+is safe only because it binds loopback. Do not bind it wider until that lands.
 
 ## Licence
 

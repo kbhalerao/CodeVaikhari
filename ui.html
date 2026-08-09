@@ -50,7 +50,8 @@ aside{background:var(--panel);border-right:1px solid var(--line);
 .sess:hover{background:var(--bg)}
 .sess.dead{opacity:.5}
 .sess .hd{display:flex;align-items:center;gap:8px}
-.av{flex:none;display:block;border-radius:50%}
+.av{flex:none;display:block;border-radius:50%;object-fit:cover;
+  background:var(--line)}
 .meta .av{margin-right:1px}
 .pip{width:7px;height:7px;border-radius:50%;background:var(--live);flex:none;
   margin-left:auto}
@@ -186,6 +187,7 @@ audio{grid-column:1;height:32px;width:100%;max-width:380px}
 
 <script>
 const VOICES = __VOICES__;
+const AVATARS = new Set(__AVATARS__);
 const $ = id => document.getElementById(id);
 let sig = '';
 
@@ -237,6 +239,10 @@ function drawSessions(ss) {
 // of the name, the monogram is its given name, and British voices carry an
 // inner ring. Deterministic, so a voice always looks the same.
 function avatar(voice, size) {
+  if (AVATARS.has(voice)) {
+    return `<img class="av" width="${size}" height="${size}" loading="lazy"
+      src="/avatars/${voice}.webp" alt="${esc(voice)}" title="${esc(voice)}">`;
+  }
   const given = (voice || '').slice(3) || '?';
   const ring = (voice || '')[0] === 'b';
   const female = (voice || '')[1] === 'f';

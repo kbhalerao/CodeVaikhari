@@ -699,7 +699,9 @@ def handle(conn):
 
 # ---------------------------------------------------------------- web UI
 
-UI_HTML = os.path.join(os.path.dirname(os.path.realpath(__file__)), "ui.html")
+HERE = os.path.dirname(os.path.realpath(__file__))
+UI_HTML = os.path.join(HERE, "ui.html")
+AVATAR_DIR = os.path.join(HERE, "avatars")
 
 
 class UI(BaseHTTPRequestHandler):
@@ -728,6 +730,14 @@ class UI(BaseHTTPRequestHandler):
             page = page.replace("__VOICES__", json.dumps(
                 [[v, GRADES.get(v, "")] for v in VOICE_POOL]))
             page = page.replace("__HOME__", json.dumps(os.path.expanduser("~")))
+            # Tell the page which voices have artwork; the rest fall back to
+            # a generated monogram, so a checkout without avatars/ still works.
+            try:
+                have = sorted(f[:-5] for f in os.listdir(AVATAR_DIR)
+                              if f.endswith(".webp"))
+            except OSError:
+                have = []
+            page = page.replace("__AVATARS__", json.dumps(have))
             return self._send(200, "text/html; charset=utf-8", page.encode())
         if self.path == "/api/history":
             return self._send(200, "application/json", json.dumps(history()).encode())
@@ -738,6 +748,23 @@ class UI(BaseHTTPRequestHandler):
         if self.path == "/api/sessions":
             return self._send(200, "application/json",
                               json.dumps(list_sessions()).encode())
+        if self.path.startswith("/avatars/"):
+            name = os.path.basename(self.path[len("/avatars/"):])
+            path = os.path.join(AVATAR_DIR, name)
+            if name.endswith(".webp") and os.path.isfile(path):
+                with open(path, "rb") as fh:
+                    body = fh.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/webp")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "public, max-age=604800")
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
+            return self._send(404, "text/plain", b"not found")
         if self.path.startswith("/audio/"):
             uid = os.path.basename(self.path[len("/audio/"):]).removesuffix(".wav")
             blob = audio_of(uid)

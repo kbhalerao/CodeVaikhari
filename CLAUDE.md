@@ -14,6 +14,8 @@ Four files, no framework, no build step.
 | `say` | the client. **stdlib only** |
 | `ui.html` | the whole front end. Vanilla JS, no dependencies |
 | `hooks/*.py` | Claude Code hook adapters. **stdlib only** |
+| `avatars/*.webp` | one portrait per voice, generated and committed |
+| `tools/generate-avatars.py` | build-time only; regenerates the above |
 
 `ui.html` is read from disk per request, so editing it needs no restart.
 Editing `vaikharid.py` or `say` does: `systemctl --user restart vaikhari`.
@@ -44,6 +46,10 @@ Break these and the thing stops being useful:
 6. **`dismissed` and `played` are separate axes.** Heard-but-not-acted-on
    still sits in the inbox. Conflating them breaks repeat.
 
+7. **The HTTP server has no auth.** It is safe only because it binds
+   `127.0.0.1`. Never widen the bind without adding a token first — the
+   message text is genuinely sensitive. See `docs/REMOTE.md`.
+
 ## Gotchas
 
 - **`pkill -f vaikharid` matches its own shell** when the pattern appears in
@@ -64,6 +70,10 @@ Break these and the thing stops being useful:
 
 - **The env var is `CLAUDE_CODE_SESSION_ID`.** Not `CLAUDE_SESSION_ID`, which
   is never set.
+
+- **Avatars are optional.** `avatars/` is committed, but the UI falls back to
+  an SVG monogram per voice, so never assume a file exists. The daemon tells
+  the page which ones it actually found.
 
 ## Testing
 
