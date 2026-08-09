@@ -13,9 +13,9 @@ monogram for any voice without a file here.
 Auth comes from CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID, or is read from
 an existing `wrangler login` session. The token needs Workers AI write.
 
-Style is deliberately flat vector illustration, not photoreal: it reads at
-28px, stays consistent across 28 generations, and avoids putting synthetic
-photographs of "people" next to accent and gender labels.
+Style is deliberately flat vector illustration, not photoreal: it stays
+legible at 30-40px, holds together across 28 generations, and avoids putting
+synthetic photographs of "people" next to accent and gender labels.
 """
 import argparse
 import base64
@@ -32,7 +32,7 @@ import urllib.request
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "avatars"
 MODEL = "@cf/black-forest-labs/flux-1-schnell"
-SIZE = 96                      # displayed at 22-28px; 96 covers 3x screens
+SIZE = 128                     # displayed at 30-40px; 128 covers 3x screens
 
 STYLE = ("flat vector avatar illustration, head and shoulders portrait, "
          "centered, simple bold geometric shapes, clean flat colour fills, "
@@ -148,7 +148,7 @@ def main():
         png = OUT / f"{voice}.png"
         png.write_bytes(generate(voice, token, account))
         # Square-crop to the centre, downscale, and convert. cwebp at q80 puts
-        # a 96px avatar at roughly 4 KB, so all 28 cost ~120 KB in the repo.
+        # a 128px avatar under 2 KB, so all 28 cost ~53 KB in the repo.
         subprocess.run(["convert", str(png), "-gravity", "center",
                         "-crop", "1:1", "+repage",
                         "-resize", f"{SIZE}x{SIZE}", str(png)], check=True)

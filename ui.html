@@ -46,21 +46,22 @@ aside{background:var(--panel);border-right:1px solid var(--line);
 .scroll{overflow-y:auto;flex:1;min-height:0;padding:0 12px 12px}
 
 .sess{border-radius:var(--radius);padding:9px 10px;margin-bottom:5px;
-  border:1px solid transparent}
+  border:1px solid transparent;display:flex;gap:10px;align-items:flex-start}
+.sess .col{flex:1;min-width:0}
 .sess:hover{background:var(--bg)}
 .sess.dead{opacity:.5}
-.sess .hd{display:flex;align-items:center;gap:8px}
+.sess .hd{display:flex;align-items:center;gap:8px;min-height:20px}
 .av{flex:none;display:block;border-radius:50%;object-fit:cover;
   background:var(--line)}
 .meta .av{margin-right:1px}
 .pip{width:7px;height:7px;border-radius:50%;background:var(--live);flex:none;
   margin-left:auto}
 .sess.dead .pip{background:var(--faint)}
-.sess .nm{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;
+.sess .nm{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap}
-.sess .path{font-size:11px;color:var(--faint);margin:3px 0 7px 34px;
+.sess .path{font-size:11.5px;color:var(--faint);margin:2px 0 7px 0;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sess .vr{display:flex;gap:5px;margin-left:34px}
+.sess .vr{display:flex;gap:5px}
 .sess select{flex:1;min-width:0;background:var(--bg);border:1px solid var(--line);
   border-radius:7px;padding:4px 6px;font-size:11.5px}
 .hear{background:transparent;border:1px solid var(--line);border-radius:7px;
@@ -105,7 +106,7 @@ h2{margin:0;font-size:17px;font-weight:650;letter-spacing:-.01em}
 .msg.pending{border-color:var(--warn-line);box-shadow:inset 3px 0 0 var(--sc)}
 .msg.done{opacity:.62}
 .meta{display:flex;align-items:center;gap:9px;font-size:11.5px;color:var(--faint);
-  flex-wrap:wrap;grid-column:1}
+  flex-wrap:wrap;grid-column:1;min-height:30px}
 .tag{background:var(--sc);color:#fff;border-radius:20px;padding:1.5px 9px;
   font-size:11px;font-weight:650}
 .unheard{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line);
@@ -222,14 +223,17 @@ function shortPath(p) {
 function drawSessions(ss) {
   $('sessions').innerHTML = ss.length ? ss.map(s => `
     <div class="sess ${s.ended ? 'dead' : ''}" style="--sc:hsl(${hue(s.project)} 60% 47%)">
-      <div class="hd">${avatar(s.voice, 26)}<span class="nm">${esc(s.label)}</span>
-        <span class="pip" title="${s.ended ? 'ended' : 'live'}"></span></div>
-      <div class="path" title="${esc(s.cwd || '')}">${esc(shortPath(s.cwd))}</div>
-      <div class="vr">
-        <select autocomplete="off" onchange="pin('${esc(s.project)}', this.value, '${s.voice}')">
-          ${VOICES.map(v => `<option value="${v[0]}"${v[0] === s.voice ? ' selected' : ''}>${v[0]} · ${v[1]}</option>`).join('')}
-        </select>
-        <button class="hear" onclick="preview(this.previousElementSibling.value, '${esc(s.project)}', this)">hear</button>
+      ${avatar(s.voice, 40)}
+      <div class="col">
+        <div class="hd"><span class="nm">${esc(s.label)}</span>
+          <span class="pip" title="${s.ended ? 'ended' : 'live'}"></span></div>
+        <div class="path" title="${esc(s.cwd || '')}">${esc(shortPath(s.cwd))}</div>
+        <div class="vr">
+          <select autocomplete="off" onchange="pin('${esc(s.project)}', this.value, '${s.voice}')">
+            ${VOICES.map(v => `<option value="${v[0]}"${v[0] === s.voice ? ' selected' : ''}>${v[0]} · ${v[1]}</option>`).join('')}
+          </select>
+          <button class="hear" onclick="preview(this.previousElementSibling.value, '${esc(s.project)}', this)">hear</button>
+        </div>
       </div>
     </div>`).join('') : '<div class="none">No sessions registered yet.</div>';
 }
@@ -260,7 +264,7 @@ function avatar(voice, size) {
 function card(m, pending) {
   return `<div class="msg ${pending ? 'pending' : 'done'}" style="--sc:hsl(${hue(m.session.split('.')[0])} 60% 47%)">
     <div class="meta">
-      ${avatar(m.voice, 22)}
+      ${avatar(m.voice, 30)}
       <span class="tag">${esc(m.session)}</span><span>${when(m.ts)}</span>
       <span>${esc(m.voice)}</span><span>${m.dur}s</span>
       ${m.played ? '' : '<span class="unheard">UNHEARD</span>'}

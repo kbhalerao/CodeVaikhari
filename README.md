@@ -120,8 +120,9 @@ like the session it ran in:
 
 Kokoro ships no artwork for its voices — they are style tensors, not
 characters — so `avatars/` holds one flat-vector portrait per voice,
-generated once with FLUX.1 [schnell] (Apache-2.0) and committed. All 28 come
-to 38 KB, so a clone needs no image model and no Cloudflare account.
+generated once with FLUX.1 [schnell] (Apache-2.0) and committed. All 28 are
+128px and come to 53 KB, so a clone needs no image model and no Cloudflare
+account.
 
 Regenerate or restyle them with `tools/generate-avatars.py` (needs a
 Cloudflare token with Workers AI write, or a current `wrangler login`). Seeds
