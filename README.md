@@ -224,6 +224,11 @@ hourly pass.
 | `Notification` | speak what needs attention |
 | `Stop` | speak the conclusion of what just happened |
 
+`install.sh` also links `skills/vaikhari` into `~/.claude/skills/`, which
+teaches Claude how the inbox, dismissal and voices behave. It is progressive:
+a short `SKILL.md` loads when `say` comes up, and three reference files under
+it are read only when the specific question arises.
+
 ### What Stop actually says
 
 "*project* finished" tells you nothing you did not already know. The

@@ -25,6 +25,14 @@ echo "==> linking say -> $BIN/say"
 mkdir -p "$BIN"
 ln -sf "$HERE/say" "$BIN/say"
 
+# Teach Claude Code how the thing behaves. A symlink rather than a copy so the
+# skill tracks the checkout.
+if [ -d "$HOME/.claude" ]; then
+  echo "==> linking skill -> ~/.claude/skills/vaikhari"
+  mkdir -p "$HOME/.claude/skills"
+  ln -sfn "$HERE/skills/vaikhari" "$HOME/.claude/skills/vaikhari"
+fi
+
 if [ "${1:-}" = "--systemd" ]; then
   echo "==> installing user service"
   mkdir -p "$HOME/.config/systemd/user"
