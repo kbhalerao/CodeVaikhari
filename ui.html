@@ -1,6 +1,6 @@
 <!doctype html>
 <html><head><meta charset="utf-8">
-<title>say</title>
+<title>Code Vaikhari</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='14'>%F0%9F%94%8A</text></svg>">
 <style>
@@ -32,8 +32,8 @@ button{cursor:pointer}
 /* ---------------------------------------------------------- sidebar */
 aside{background:var(--panel);border-right:1px solid var(--line);
   display:flex;flex-direction:column;min-height:0}
-.brand{display:flex;align-items:center;gap:8px;padding:16px 18px 12px;
-  font-weight:650;font-size:16px;letter-spacing:-.01em}
+.brand{display:flex;align-items:baseline;gap:8px;padding:16px 18px 12px;
+  font-weight:650;font-size:15px;letter-spacing:-.015em}
 .brand .st{margin-left:auto;font-size:11px;font-weight:500;color:var(--dim)}
 .controls{display:flex;gap:7px;padding:0 18px 14px}
 .controls button{flex:1;background:transparent;border:1px solid var(--line);
@@ -49,15 +49,17 @@ aside{background:var(--panel);border-right:1px solid var(--line);
   border:1px solid transparent}
 .sess:hover{background:var(--bg)}
 .sess.dead{opacity:.5}
-.sess .hd{display:flex;align-items:center;gap:7px}
-.pip{width:8px;height:8px;border-radius:50%;background:var(--sc);flex:none;
-  box-shadow:0 0 0 2.5px color-mix(in srgb,var(--sc) 22%,transparent)}
-.sess.dead .pip{background:var(--faint);box-shadow:none}
+.sess .hd{display:flex;align-items:center;gap:8px}
+.av{flex:none;display:block;border-radius:50%}
+.meta .av{margin-right:1px}
+.pip{width:7px;height:7px;border-radius:50%;background:var(--live);flex:none;
+  margin-left:auto}
+.sess.dead .pip{background:var(--faint)}
 .sess .nm{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap}
-.sess .path{font-size:11px;color:var(--faint);margin:2px 0 7px 15px;
+.sess .path{font-size:11px;color:var(--faint);margin:3px 0 7px 34px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sess .vr{display:flex;gap:5px;margin-left:15px}
+.sess .vr{display:flex;gap:5px;margin-left:34px}
 .sess select{flex:1;min-width:0;background:var(--bg);border:1px solid var(--line);
   border-radius:7px;padding:4px 6px;font-size:11.5px}
 .hear{background:transparent;border:1px solid var(--line);border-radius:7px;
@@ -125,6 +127,21 @@ audio{grid-column:1;height:32px;width:100%;max-width:380px}
 .empty{text-align:center;color:var(--faint);padding:64px 20px;font-size:14px}
 .empty b{display:block;color:var(--dim);font-size:15.5px;margin-bottom:5px;font-weight:600}
 
+/* Every action hits a daemon that may be mid-utterance, so nothing is
+   instant. Show it working rather than looking dead. */
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.busy{position:relative;color:transparent!important;pointer-events:none}
+.busy>*{visibility:hidden}
+.busy::after{content:"";position:absolute;inset:0;margin:auto;width:14px;height:14px;
+  border:2px solid currentColor;border-top-color:transparent;border-radius:50%;
+  animation:spin .6s linear infinite;color:var(--dim)}
+.big.busy::after{color:var(--accent-fg);width:16px;height:16px}
+.big.ghost.busy::after,.dismiss.busy::after,.del.busy::after,.hear.busy::after{color:var(--accent)}
+.speaking{display:inline-flex;align-items:center;gap:5px;color:var(--live);font-weight:600}
+.speaking i{width:6px;height:6px;border-radius:50%;background:var(--live);
+  animation:pulse 1s ease-in-out infinite;display:block}
+
 @media(max-width:820px){
   .app{grid-template-columns:1fr;height:auto}
   aside{border-right:none;border-bottom:1px solid var(--line)}
@@ -135,7 +152,7 @@ audio{grid-column:1;height:32px;width:100%;max-width:380px}
 
 <div class="app">
   <aside>
-    <div class="brand">say <span class="st" id="st"></span></div>
+    <div class="brand">Code Vaikhari <span class="st" id="st"></span></div>
     <div class="controls">
       <button id="mute">…</button>
       <button id="stop">stop</button>
@@ -182,6 +199,13 @@ const when = ts => {
 };
 const post = (url, body) => fetch(url, {method:'POST', body: body ? JSON.stringify(body) : null});
 
+// Wrap any click that talks to the daemon so the button shows it is working.
+async function busy(el, fn) {
+  if (!el || el.classList.contains('busy')) return;
+  el.classList.add('busy');
+  try { await fn(); } finally { el.classList.remove('busy'); }
+}
+
 // Truncate from the left — the tail of a path is the identifying part. Done in
 // JS rather than with direction:rtl, which strands the leading slash on the
 // wrong end of the string.
@@ -195,20 +219,41 @@ function shortPath(p) {
 function drawSessions(ss) {
   $('sessions').innerHTML = ss.length ? ss.map(s => `
     <div class="sess ${s.ended ? 'dead' : ''}" style="--sc:hsl(${hue(s.project)} 60% 47%)">
-      <div class="hd"><span class="pip"></span><span class="nm">${esc(s.label)}</span></div>
+      <div class="hd">${avatar(s.voice, 26)}<span class="nm">${esc(s.label)}</span>
+        <span class="pip" title="${s.ended ? 'ended' : 'live'}"></span></div>
       <div class="path" title="${esc(s.cwd || '')}">${esc(shortPath(s.cwd))}</div>
       <div class="vr">
         <select autocomplete="off" onchange="pin('${esc(s.project)}', this.value, '${s.voice}')">
           ${VOICES.map(v => `<option value="${v[0]}"${v[0] === s.voice ? ' selected' : ''}>${v[0]} · ${v[1]}</option>`).join('')}
         </select>
-        <button class="hear" onclick="preview(this.previousElementSibling.value, '${esc(s.project)}')">hear</button>
+        <button class="hear" onclick="preview(this.previousElementSibling.value, '${esc(s.project)}', this)">hear</button>
       </div>
     </div>`).join('') : '<div class="none">No sessions registered yet.</div>';
+}
+
+// Kokoro ships no artwork for its voices — they are style tensors, not
+// characters — so derive an avatar from the voice name instead. Hue is a hash
+// of the name, the monogram is its given name, and British voices carry an
+// inner ring. Deterministic, so a voice always looks the same.
+function avatar(voice, size) {
+  const given = (voice || '').slice(3) || '?';
+  const ring = (voice || '')[0] === 'b';
+  const female = (voice || '')[1] === 'f';
+  const h = hue(voice || '');
+  return `<svg class="av" width="${size}" height="${size}" viewBox="0 0 32 32"
+       role="img" aria-label="${esc(voice)}"><title>${esc(voice)} — ${
+       ring ? 'British' : 'American'} ${female ? 'female' : 'male'}</title>
+    <circle cx="16" cy="16" r="15.5" fill="hsl(${h} 52% 44%)"/>
+    ${ring ? '<circle cx="16" cy="16" r="12.6" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="1.5"/>' : ''}
+    <text x="16" y="21.4" text-anchor="middle" font-size="14.5" font-weight="600"
+          fill="#fff" font-family="ui-sans-serif,system-ui,sans-serif"
+          >${esc(given[0].toUpperCase())}</text></svg>`;
 }
 
 function card(m, pending) {
   return `<div class="msg ${pending ? 'pending' : 'done'}" style="--sc:hsl(${hue(m.session.split('.')[0])} 60% 47%)">
     <div class="meta">
+      ${avatar(m.voice, 22)}
       <span class="tag">${esc(m.session)}</span><span>${when(m.ts)}</span>
       <span>${esc(m.voice)}</span><span>${m.dur}s</span>
       ${m.played ? '' : '<span class="unheard">UNHEARD</span>'}
@@ -217,8 +262,8 @@ function card(m, pending) {
     <audio controls preload="none" src="/audio/${m.id}.wav"
            onplay="fetch('/api/heard/${m.id}',{method:'POST'})"></audio>
     <div class="acts">
-      ${pending ? `<button class="dismiss" onclick="dismiss('${m.id}')">Dismiss</button>` : ''}
-      <button class="del" onclick="del('${m.id}')" title="Delete permanently">delete</button>
+      ${pending ? `<button class="dismiss" onclick="dismiss(this,'${m.id}')">Dismiss</button>` : ''}
+      <button class="del" onclick="del(this,'${m.id}')" title="Delete permanently">delete</button>
     </div>
   </div>`;
 }
@@ -228,7 +273,8 @@ function drawFeed(items, muted) {
   const done = items.filter(m => m.dismissed);
   $('cnt').textContent = pending.length;
   $('cnt').className = 'cnt' + (pending.length ? '' : ' zero');
-  document.title = pending.length ? `(${pending.length}) say` : 'say';
+  document.title = pending.length ? `(${pending.length}) Code Vaikhari`
+                                : 'Code Vaikhari';
   $('dismissAll').disabled = !pending.length;
   $('playAll').disabled = !pending.length || muted;
   $('playAll').title = muted ? 'Unmute to play the inbox aloud' : '';
@@ -249,7 +295,8 @@ async function refresh() {
 
   $('mute').textContent = st.muted ? 'muted' : 'mute';
   $('mute').className = st.muted ? 'on' : '';
-  $('st').textContent = st.muted ? 'queueing silently' : 'speaking';
+  $('st').innerHTML = st.speaking ? '<span class="speaking"><i></i>speaking</span>'
+                    : (st.muted ? 'queueing silently' : 'idle');
 
   if (document.activeElement !== $('repmin')) {
     $('rep').checked = st.repeat_enabled;
@@ -270,25 +317,46 @@ async function refresh() {
   drawFeed(items, st.muted);
 }
 
-async function dismiss(id) { await post('/api/dismiss/' + id); sig = ''; refresh(); }
-async function del(id)     { await post('/api/delete/' + id);  sig = ''; refresh(); }
+async function dismiss(el, id) {
+  await busy(el, () => post('/api/dismiss/' + id));
+  sig = ''; refresh();
+}
+async function del(el, id) {
+  await busy(el, () => post('/api/delete/' + id));
+  sig = ''; refresh();
+}
 async function pin(project, voice, current) {
   // Browsers restore <select> values across a reload and fire change while
   // doing it, which silently pinned whatever happened to be on screen. Only
   // act on a real change of value.
   if (voice === current) return;
-  await post('/api/pin', {project, voice});
-  await preview(voice, project);
+  const sel = event && event.target;
+  if (sel) sel.disabled = true;
+  try {
+    await post('/api/pin', {project, voice});
+    await preview(voice, project);
+  } finally {
+    if (sel) sel.disabled = false;
+  }
   sig = ''; refresh();
 }
-async function preview(voice, project) {
-  await post('/api/preview', {voice, text: `This is the ${project} session speaking.`});
+async function preview(voice, project, el) {
+  const call = () => post('/api/preview',
+    {voice, text: `This is the ${project} session speaking.`});
+  return el ? busy(el, call) : call();
 }
 
-$('mute').onclick      = async () => { await post('/api/mute', {mute: $('mute').className !== 'on'}); sig = ''; refresh(); };
-$('stop').onclick      = () => post('/api/stop');
-$('playAll').onclick   = () => post('/api/drain');
-$('dismissAll').onclick= async () => { await post('/api/dismiss-all'); sig = ''; refresh(); };
+$('mute').onclick = async () => {
+  const on = $('mute').classList.contains('on');
+  await busy($('mute'), () => post('/api/mute', {mute: !on}));
+  sig = ''; refresh();
+};
+$('stop').onclick = () => busy($('stop'), () => post('/api/stop'));
+$('playAll').onclick = () => busy($('playAll'), () => post('/api/drain'));
+$('dismissAll').onclick = async () => {
+  await busy($('dismissAll'), () => post('/api/dismiss-all'));
+  sig = ''; refresh();
+};
 $('rep').onchange      = async () => { await post('/api/prefs', {repeat_enabled: $('rep').checked}); sig = ''; refresh(); };
 $('repmin').onchange   = async () => { await post('/api/prefs', {repeat_minutes: +$('repmin').value}); sig = ''; refresh(); };
 

@@ -1,0 +1,95 @@
+# Working in this repo
+
+Local TTS daemon that speaks coding-agent notifications, giving each project
+its own voice. Read `README.md` for what it does; this file is about changing
+it safely.
+
+## Shape
+
+Four files, no framework, no build step.
+
+| File | Role |
+|---|---|
+| `vaikharid.py` | the daemon: model, SQLite, unix socket, HTTP UI |
+| `say` | the client. **stdlib only** |
+| `ui.html` | the whole front end. Vanilla JS, no dependencies |
+| `hooks/*.py` | Claude Code hook adapters. **stdlib only** |
+
+`ui.html` is read from disk per request, so editing it needs no restart.
+Editing `vaikharid.py` or `say` does: `systemctl --user restart vaikhari`.
+
+## Invariants
+
+Break these and the thing stops being useful:
+
+1. **`say` and the hooks import stdlib only.** They are the hot path, run on
+   every notification. Importing torch there would put the 10.7 s cold start
+   back on every call. All model work belongs in the daemon.
+
+2. **Playback is serial.** One worker thread drains `_jobs`; each job blocks
+   until `pw-play` exits. Never play from another thread — overlapping audio
+   is unintelligible. `gap()` enforces the 3 s floor between utterances.
+
+3. **A voice is a lookup, not an allocation.** `voice_for_project()` is the
+   single source of truth, cached in the `voices` table and sticky. Do not
+   re-derive a voice anywhere else; that bug shipped twice and both times the
+   symptom was one session speaking in two voices.
+
+4. **Hooks never fail loudly.** They wrap everything and swallow errors. A
+   broken TTS setup must not break the user's coding session.
+
+5. **The inbox is not backlog.** Pruning only ever touches `dismissed=1` rows.
+   An undismissed message is never dropped, by count or by byte budget.
+
+6. **`dismissed` and `played` are separate axes.** Heard-but-not-acted-on
+   still sits in the inbox. Conflating them breaks repeat.
+
+## Gotchas
+
+- **`pkill -f vaikharid` matches its own shell** when the pattern appears in
+  the command text, killing the shell mid-script. Use
+  `systemctl --user restart vaikhari`, or `pkill -O 3 -f vaikharid`.
+
+- **`_db_lock` is an `RLock`** because the db helpers nest
+  (`register_session` → `voice_for_project`). Keep it reentrant.
+
+- **Browsers restore `<select>` values on reload and fire `change`.** The
+  voice picker is guarded with `autocomplete="off"` and a no-op check against
+  the current value. Without both, merely reloading the UI silently pins
+  whatever was on screen.
+
+- **Session labels are `project.xxxx`, not session ids.** `say -S` accepts
+  either; `resolve_session` tries the session table first, then falls back to
+  project. Pass the real `CLAUDE_CODE_SESSION_ID` when you have it.
+
+- **The env var is `CLAUDE_CODE_SESSION_ID`.** Not `CLAUDE_SESSION_ID`, which
+  is never set.
+
+## Testing
+
+There is no test suite; it is an audio daemon and the useful assertions are
+about timing and sound. Verify by hand, and prefer checking the database over
+trusting the logs:
+
+```bash
+say --status                      # muted, pending, repeat interval
+say --sessions                    # who holds which voice
+
+sqlite3 ~/.local/state/vaikhari/vaikhari.db \
+  'SELECT session,voice,played,dismissed,text FROM utterances ORDER BY ts DESC LIMIT 5;'
+```
+
+Synthesize without making noise: `say -o /tmp/out.wav "text"`.
+
+When testing timing, remember rows are written **when playback ends**, so
+`ts` deltas minus `dur` give the real silence between utterances.
+
+Set `say --repeat 1` to exercise the repeat loop in ~60 s rather than 10 min,
+and put it back to 10 afterwards.
+
+## Style
+
+Match what is there: plain functions, no classes beyond the HTTP handler, no
+speculative extension points. Comments explain *why* a thing is the way it is,
+not what the line does — the non-obvious tradeoffs are what a reader needs.
+Prefer deleting a requirement to implementing it.

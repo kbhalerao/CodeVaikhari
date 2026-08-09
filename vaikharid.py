@@ -557,6 +557,11 @@ def repeater():
             log(f"repeater: {type(exc).__name__}: {exc}")
 
 
+def is_speaking():
+    with _current_lock:
+        return _current is not None and _current.poll() is None
+
+
 def stop_current():
     with _current_lock:
         if _current is not None and _current.poll() is None:
@@ -720,7 +725,8 @@ class UI(BaseHTTPRequestHandler):
             return self._send(200, "application/json", json.dumps(history()).encode())
         if self.path == "/api/status":
             return self._send(200, "application/json", json.dumps(
-                {"muted": is_muted(), "pending": pending_count(), **prefs()}).encode())
+                {"muted": is_muted(), "pending": pending_count(),
+                 "speaking": is_speaking(), **prefs()}).encode())
         if self.path == "/api/sessions":
             return self._send(200, "application/json",
                               json.dumps(list_sessions()).encode())

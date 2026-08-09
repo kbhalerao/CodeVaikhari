@@ -1,112 +1,112 @@
-# CodeVaikhari
+# Code Vaikhari
 
-Local neural text-to-speech for this machine, plus an inbox and review UI.
-Replaces `spd-say` for Claude Code notifications and anything else that wants
-to talk.
+Give every coding-agent session its own voice.
 
-*Vaikharī* is the fourth and final stage of speech in Sanskrit grammar: the
-articulated, audible one, as against the mental (*madhyamā*) and visionary
-(*paśyantī*) levels. This is the last hop from text to something you can hear.
-Sibling to [CodeAkriti](../CodeAkriti) and code-smriti.
+Local neural text-to-speech with an inbox, a review UI, and per-project voices,
+so when a background session speaks you know *which* one spoke without looking.
+Built for [Claude Code](https://claude.com/claude-code) notifications, but the
+`say` command works from anything.
 
-Runs [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) on
-the local GPU. Nothing leaves the machine.
+Runs [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) on a
+local GPU or CPU. Nothing leaves the machine.
+
+> *Vaikharī* is the fourth and final stage of speech in Sanskrit grammar: the
+> articulated, audible one, as against the mental (*madhyamā*) and visionary
+> (*paśyantī*) levels. This is the last hop from text to something you can hear.
+
+---
 
 ## Why a daemon
 
-Kokoro is small but torch is not. Measured on this box (RTX 3060):
+Kokoro is small. Torch is not. Measured on an RTX 3060:
 
 | | |
 |---|---|
-| `import torch` + `kokoro` | 5.4s |
-| model load to GPU | 2.7s |
-| **cold total per invocation** | **10.7s** |
-| warm synthesis | **0.13s** for 5.6s of audio (43× realtime) |
+| `import torch` + `kokoro` | 5.4 s |
+| model load to GPU | 2.7 s |
+| **cold total, per invocation** | **10.7 s** |
+| warm synthesis | **0.13 s** for 5.6 s of audio (43× realtime) |
 
-So a script that loads the model per call would take ten seconds to say "build
-finished". The model lives in a resident daemon; `say` is a stdlib-only client
-that talks to it over a unix socket.
+A script that loaded the model per call would take ten seconds to say "build
+finished". So the model lives in a resident daemon, and `say` is a
+stdlib-only client that talks to it over a unix socket. Measured end-to-end
+cost of a warm `say`: **41 ms**.
+
+## Requirements
+
+- Linux with PipeWire (`pw-play`)
+- [uv](https://docs.astral.sh/uv/)
+- A CUDA GPU, or set `VAIKHARI_DEVICE=cpu` (Kokoro is comfortably realtime on
+  a modern CPU; only the cold start gets slower)
+- ~5 GB of disk for the venv, ~350 MB for model weights
 
 ## Install
 
 ```bash
-./install.sh --systemd     # venv + PATH link + keep the daemon warm from login
-./install.sh               # without systemd; first say of each boot pays 10s
+git clone https://github.com/<you>/CodeVaikhari && cd CodeVaikhari
+./install.sh --systemd     # venv, PATH link, daemon warm from login
+./install.sh               # no systemd; the first say of each boot pays 10 s
 ```
-
-Requires [uv](https://docs.astral.sh/uv/) and PipeWire (`pw-play`).
 
 ## Use
 
 ```bash
-say "build finished"                 # fire and forget
-echo "long text" | say               # stdin
-say -w "done"                        # block until playback ends
-say -v bm_george "hello"             # override the voice
-say --voices                         # list all 28 English voices, with grades
-say -o out.wav "render to a file"
+say "build finished"            # fire and forget
+echo "long text" | say          # stdin
+say -w "done"                   # block until playback ends
+say -v bm_george "hello"        # override the voice
+say --voices                    # all 28 English voices, with quality grades
+say -o out.wav "to a file"
 
-say --mute                           # global mute; messages queue instead
+say --mute                      # global mute; messages queue instead of vanishing
 say --unmute
-say --inbox                          # speak everything that queued while muted
-say --status                         # muted? how many waiting?
-say --stop                           # shut it up mid-sentence
-
-say --dismiss                        # dismiss everything waiting
-say --repeat 20                      # re-speak undismissed every 20 min
+say --inbox                     # speak what is waiting
+say --dismiss                   # dismiss everything waiting
+say --repeat 20                 # re-speak undismissed every 20 min
 say --no-repeat
+say --stop                      # shut it up mid-sentence
+say --status                    # muted? how many waiting?
 
-say --sessions                       # who is registered, and with which voice
-say --pin bm_fable                   # pin this project to a voice
-say --unpin                          # back to automatic allocation
-say --pins                           # list pinned projects
-say --ui                             # open the review UI
+say --sessions                  # who is registered, and with which voice
+say --pin bm_fable              # pin this project to a voice
+say --unpin
+say --ui                        # open the review UI
 ```
 
 ## The UI
 
-`http://127.0.0.1:8765` — served by the daemon. Two panes:
+`http://127.0.0.1:8765`, served by the daemon.
 
-**Left rail** — live sessions, each with a coloured pip, its working
-directory, and a voice dropdown. Changing the dropdown **pins** that project
-to the voice and immediately plays a sample, so you can choose by ear.
-Preferences sit at the bottom.
+**Left rail** — live sessions, each with a generated avatar, its working
+directory, and a voice picker. Choosing a voice pins the project to it and
+plays a sample, so you can pick by ear. Preferences at the bottom.
 
 **Right pane** — the inbox. Undismissed messages first, each with a replay
-player and a **Dismiss** button; dismissed ones fall below a divider. One big
-**Dismiss all**. `delete` removes a message from the database outright.
+player and a **Dismiss**; dismissed ones fall below a divider. `delete` drops
+a message from the database. The tab title carries the pending count, so a
+background tab still tells you how many are waiting.
 
-The tab title carries the pending count, so a background tab still tells you
-how many are waiting.
-
-### Repeat
-
-Undismissed messages are re-spoken every N minutes (default **10**, toggle and
-interval in Preferences, or `say --repeat 20` / `say --no-repeat`). The clock
-runs from the newest undismissed message *or* the last repeat, whichever is
-later, so a message is never nagged sooner than the full interval after it
-arrives.
-
-Repeat is paused while muted — mute means make no noise, and a reminder is
-still noise. A single repeat reads out at most 5 messages and then says how
-many more are stacked up, rather than working through twenty of them.
+Replay never re-synthesizes: the audio is archived with the message.
 
 ## Sessions and voices
 
-Each Claude Code session registers on start (`SessionStart` hook) and takes
-its project's voice.
-
 **A voice is a cached preference, keyed by project, and it is sticky.** The
 first session in a repo takes the next voice no other project owns; every
-session after that reads the same voice back from the `voices` table. So a
-voice always means one repo, which is the point of hearing which session
-spoke. Two sessions in the same repo therefore sound alike — they are the same
-project, and the label (`farmworth.a3f1`) tells them apart in the UI.
+session after reads the same voice back. So a voice always means one repo,
+which is the entire point of hearing which session spoke. Two sessions in the
+same repo therefore sound alike — they *are* the same project, and the label
+(`myproject.a3f1`) separates them in the UI.
+
+The pool is all 28 English voices, ordered by the model card's quality grade
+(best first) and alternating accent and gender, so the first few projects get
+voices that are both good and easy to tell apart. Past 28 it wraps. Kokoro
+ships 54 voices; the other 26 are Japanese, Chinese, Spanish, French, Hindi,
+Italian and Portuguese, and are not in the rotation.
 
 ### Attribution
 
 The client works out who is speaking on its own, so a bare `say "done"` sounds
-like the session it was run from:
+like the session it ran in:
 
 | Where `say` runs | Attributed to |
 |---|---|
@@ -114,84 +114,95 @@ like the session it was run from:
 | A plain shell in a repo | that project, via `cwd` |
 | Anywhere else | `cli`, default voice |
 
-`-S` and `--cwd` override both. A session that speaks without having
-registered self-registers from its `cwd`, so sessions predating the hooks
-still get the right voice.
+`-S` and `--cwd` override both.
 
-On startup the daemon releases sessions older than 24h whose `SessionEnd`
-never fired, so a crashed session does not hold a slot forever.
+### Avatars
 
-The pool is all **28 English voices**, ordered by the model card's quality
-grade (best first) and alternating accent/gender, so the first few projects
-get both the best-sounding and the most distinguishable voices. Past 28
-projects it wraps and voices start repeating. Kokoro ships
-54 voices in total; the other 26 are Japanese, Chinese, Spanish, French,
-Hindi, Italian and Portuguese, and are not in the rotation.
+Kokoro ships no artwork for its voices — they are style tensors, not
+characters — so the UI derives one: hue hashed from the voice name, monogram
+from its given name, an inner ring for British voices. Deterministic, so a
+voice always looks the same, and no assets to ship.
 
-### Pinning a project to a voice
+## Repeat
 
-```bash
-cd ~/Documents/farmworth && say --pin bm_fable
-```
+Undismissed messages are re-spoken every N minutes (default 10). The clock
+runs from the newest undismissed message *or* the last repeat, whichever is
+later, so nothing is nagged sooner than the full interval after it arrives.
 
-A pin is your stated preference and outranks everything, including collision
-avoidance — pin two projects to one voice and they will both use it. It
-survives daemon restarts. `say --unpin` clears the pin; live sessions keep the
-voice they are already using for the rest of their life, since reshuffling
-mid-session would change the thing you just learned to recognise.
+Repeat pauses while muted: mute means make no noise, and a reminder is still
+noise. One repeat reads at most 5 messages, then says how many more are
+stacked up, rather than working through twenty.
 
 ## Playback
 
-Playback is strictly serial: one worker thread drains the queue and each job
-blocks until `pw-play` exits, so two messages can never overlap. A **3 second
-gap** separates consecutive utterances (`VAIKHARI_GAP`). It is enforced as a
-minimum interval since the last playback ended rather than a blanket sleep, so
-an idle system still speaks immediately and only back-to-back messages get
-spaced.
+Strictly serial. One worker thread drains the queue and each job blocks until
+`pw-play` exits, so two messages can never overlap. A **3 second gap**
+separates consecutive utterances (`VAIKHARI_GAP`), enforced as a minimum
+interval since the last playback ended rather than a blanket sleep — an idle
+system still speaks immediately, and only back-to-back messages get spaced.
 
-`say --stop` kills whatever is speaking and drops the queue.
+One consequence: a very long message holds the queue for its full duration.
+`say --stop` skips it.
 
 ## Message size
 
-There is no practical text limit. Measured on this box: a 3,105-character
-passage (~480 words) synthesized in 3.4s and played for 198s, and a
-pathological 400-word sentence with no punctuation came through intact —
-misaki chunks on a token budget, not just on punctuation, so run-on text does
-not get truncated.
+No practical text limit. A 3,105-character passage (~480 words) synthesized in
+3.4 s and played for 198 s, and a 400-word sentence with no punctuation came
+through intact — misaki chunks on a token budget, not just on punctuation, so
+run-on text is not truncated.
 
-The real cost is archive size: audio is stored as a BLOB at 48 KB/s, so that
-198s message is ~9.5 MB. The archive is therefore bounded two ways — the last
-250 dismissed messages, and a 200 MB byte budget, oldest dismissed dropped
-first. The inbox is exempt from both; an undismissed message is not backlog.
+The cost is archive size: audio is stored at 48 KB/s, so that 198 s message is
+~9.5 MB. The archive is bounded two ways — the last 250 dismissed messages,
+and a 200 MB byte budget, oldest dismissed dropped first. The inbox is exempt
+from both; an undismissed message is not backlog.
 
-Note that serial playback means one very long message holds the queue for its
-full duration. `say --stop` skips it.
+## Storage
 
-Storage is SQLite at `~/.local/state/vaikhari/say.db`: `utterances` (with
-the audio as a BLOB, so replay never re-synthesizes), `sessions`, `voices`,
-`settings`. `dismissed` and `played` are separate axes: a message you heard
-but did not act on still sits in the inbox.
+SQLite at `~/.local/state/vaikhari/vaikhari.db`.
+
+| Table | Holds |
+|---|---|
+| `utterances` | text, metadata, and the audio as a BLOB |
+| `sessions` | session id, label, project, cwd, voice, start/end |
+| `voices` | the sticky project → voice cache, and pins |
+| `settings` | mute, repeat interval |
+
+`dismissed` and `played` are separate axes: a message you heard but did not
+act on still sits in the inbox.
 
 ## Claude Code wiring
 
-`~/.claude/settings.json`:
+`install.sh` does not touch your Claude Code config. Add these to
+`~/.claude/settings.json` yourself, with absolute paths to this checkout:
 
-| Hook | Script | Effect |
-|---|---|---|
-| `SessionStart` | `hooks/claude-session.py` | claim a voice |
-| `SessionEnd` | `hooks/claude-session.py` | release it |
-| `Notification` | `hooks/claude-notify.py` | speak what needs attention |
-| `Stop` | `hooks/claude-notify.py` | "\<project\> finished" |
+```json
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command",
+      "command": "/path/to/CodeVaikhari/hooks/claude-session.py"}]}],
+    "SessionEnd":   [{"hooks": [{"type": "command",
+      "command": "/path/to/CodeVaikhari/hooks/claude-session.py"}]}],
+    "Notification": [{"hooks": [{"type": "command",
+      "command": "/path/to/CodeVaikhari/hooks/claude-notify.py"}]}],
+    "Stop":         [{"hooks": [{"type": "command",
+      "command": "/path/to/CodeVaikhari/hooks/claude-notify.py"}]}]
+  }
+}
+```
 
-All hooks are fire-and-forget — they never add latency to a session, and TTS
+| Hook | Effect |
+|---|---|
+| `SessionStart` | register the session, take the project's voice |
+| `SessionEnd` | release it |
+| `Notification` | speak what needs attention |
+| `Stop` | "*project* finished" |
+
+All hooks are fire-and-forget. They never add latency to a session, and a TTS
 failure never breaks Claude Code.
-
-`/close` (in `~/.claude/commands/close.md`) releases the voice, saves
-memories, and tidies merged local branches at end of session.
 
 ## Config
 
-Environment variables, read by both client and daemon:
+Read by both client and daemon:
 
 | | |
 |---|---|
@@ -202,9 +213,24 @@ Environment variables, read by both client and daemon:
 | `VAIKHARI_SOCKET` | socket path |
 | `VAIKHARI_VENV` | venv location |
 
-## Notes
+## Troubleshooting
 
-- `nvidia-smi` on this box reports an NVML version mismatch. That breaks the
-  monitoring interface only; the CUDA runtime is fine and Kokoro uses the GPU.
-- misaki's spaCy model downloader shells out to `pip`, which breaks under a
-  `uv` shim. `install.sh` installs the `en_core_web_sm` wheel directly.
+**`nvidia-smi` reports an NVML version mismatch.** That breaks the monitoring
+interface only. The CUDA runtime is usually fine — check with
+`python -c "import torch; torch.randn(8, device='cuda')"` before assuming you
+need a reboot.
+
+**Install fails on the spaCy model.** misaki's downloader shells out to `pip`,
+which breaks under a `uv` shim. `install.sh` installs the `en_core_web_sm`
+wheel directly for this reason.
+
+**Nothing plays.** Check the sink with `wpctl status`, and test the path
+directly: `pw-play --format=s16 --rate=24000 --channels=1 - < /dev/zero`.
+
+**Logs.** `journalctl --user -u vaikhari -f`, or
+`~/.local/state/vaikhari/daemon.log` when started without systemd.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE). Kokoro-82M is Apache-2.0 and is downloaded at
+install time, not vendored here.
