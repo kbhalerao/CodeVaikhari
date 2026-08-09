@@ -1,3 +1,5 @@
+<img src="logo.svg" alt="" width="64" align="right">
+
 # Code Vaikhari
 
 Give every coding-agent session its own voice.
@@ -13,6 +15,10 @@ local GPU or CPU. Nothing leaves the machine.
 > *Vaikharī* is the fourth and final stage of speech in Sanskrit grammar: the
 > articulated, audible one, as against the mental (*madhyamā*) and visionary
 > (*paśyantī*) levels. This is the last hop from text to something you can hear.
+>
+> The mark is those stages: an unmanifest source, then arcs radiating out,
+> each more solid than the last. Only the outermost — the audible one — is
+> fully drawn.
 
 ---
 

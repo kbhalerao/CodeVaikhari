@@ -748,6 +748,9 @@ class UI(BaseHTTPRequestHandler):
         if self.path == "/api/sessions":
             return self._send(200, "application/json",
                               json.dumps(list_sessions()).encode())
+        if self.path == "/logo.svg":
+            with open(os.path.join(HERE, "logo.svg"), "rb") as fh:
+                return self._send(200, "image/svg+xml", fh.read())
         if self.path.startswith("/avatars/"):
             name = os.path.basename(self.path[len("/avatars/"):])
             path = os.path.join(AVATAR_DIR, name)

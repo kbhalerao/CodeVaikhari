@@ -16,6 +16,7 @@ Four files, no framework, no build step.
 | `hooks/*.py` | Claude Code hook adapters. **stdlib only** |
 | `avatars/*.webp` | one portrait per voice, generated and committed |
 | `tools/generate-avatars.py` | build-time only; regenerates the above |
+| `logo.svg` | the mark; also the favicon, inlined again in the header |
 
 `ui.html` is read from disk per request, so editing it needs no restart.
 Editing `vaikharid.py` or `say` does: `systemctl --user restart vaikhari`.

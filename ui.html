@@ -2,7 +2,7 @@
 <html><head><meta charset="utf-8">
 <title>Code Vaikhari</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='14'>%F0%9F%94%8A</text></svg>">
+<link rel="icon" href="/logo.svg" type="image/svg+xml">
 <style>
 :root{
   --bg:#f7f6f4; --panel:#fff; --fg:#191817; --dim:#6f6c67; --faint:#9b9791;
@@ -35,6 +35,7 @@ aside{background:var(--panel);border-right:1px solid var(--line);
 .brand{display:flex;align-items:baseline;gap:8px;padding:16px 18px 12px;
   font-weight:650;font-size:15px;letter-spacing:-.015em}
 .brand .st{margin-left:auto;font-size:11px;font-weight:500;color:var(--dim)}
+.brand .logo{flex:none;align-self:center;color:var(--accent)}
 .controls{display:flex;gap:7px;padding:0 18px 14px}
 .controls button{flex:1;background:transparent;border:1px solid var(--line);
   border-radius:8px;padding:7px 0;font-size:12.5px;font-weight:550;color:var(--dim)}
@@ -155,7 +156,16 @@ audio{grid-column:1;height:32px;width:100%;max-width:380px}
 
 <div class="app">
   <aside>
-    <div class="brand">Code Vaikhari <span class="st" id="st"></span></div>
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" width="21" height="21" aria-hidden="true">
+  <g fill="none" stroke="currentColor" stroke-linecap="round">
+    <circle cx="9" cy="16" r="2.4" fill="currentColor" stroke="none"/>
+    <path d="M12 10.8A6 6 0 0 1 12 21.2"      stroke-width="1.7" opacity=".3"/>
+    <path d="M14.25 6.9A10.5 10.5 0 0 1 14.25 25.1" stroke-width="2.1" opacity=".6"/>
+    <path d="M16.5 3A15 15 0 0 1 16.5 29"     stroke-width="2.7"/>
+  </g>
+      </svg>
+      <span>Code Vaikhari</span> <span class="st" id="st"></span></div>
     <div class="controls">
       <button id="mute">…</button>
       <button id="stop">stop</button>
