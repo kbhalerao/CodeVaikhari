@@ -29,9 +29,19 @@ Break these and the thing stops being useful:
    every notification. Importing torch there would put the 10.7 s cold start
    back on every call. All model work belongs in the daemon.
 
-2. **Playback is serial.** One worker thread drains `_jobs`; each job blocks
-   until `pw-play` exits. Never play from another thread — overlapping audio
-   is unintelligible. `gap()` enforces the 3 s floor between utterances.
+2. **Playback is serial, and there is exactly one daemon.** One worker thread
+   drains `_jobs`; each job blocks until `pw-play` exits. Never play from
+   another thread. `gap()` enforces the 3 s floor between utterances.
+
+   The serial queue only helps if one process owns it. `say` auto-starts a
+   daemon when it cannot connect, and a restart leaves a ~14 s window with no
+   socket, so a hook firing then used to start a second daemon which stole the
+   socket while the first kept its own repeater running — two processes
+   talking over each other. An `flock` on `daemon.lock`, taken before the
+   model loads, is what actually guarantees serial output.
+
+   `VAIKHARI_TRACE=1` logs every playback start and end with pid and thread.
+   Overlap cannot be diagnosed after the fact; reach for this first.
 
 3. **A voice is a lookup, not an allocation.** `voice_for_project()` is the
    single source of truth, cached in the `voices` table and sticky. Do not

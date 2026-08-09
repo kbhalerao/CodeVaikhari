@@ -13,9 +13,11 @@ Socket protocol: one JSON object per line, one reply line.
   {"play_pending":true}             drain the inbox through the speakers
   {"status":true}                   -> {"muted":bool,"pending":int,"ui":url}
 """
+import fcntl
 import json
 import os
 import queue
+import signal
 import socket
 import sqlite3
 import subprocess
@@ -43,7 +45,6 @@ KEEP_PLAYED = 250          # dismissed utterances that keep their audio
 # ~198s of audio), but audio is archived as a BLOB at 48 KB/s, so a few long
 # messages can outweigh hundreds of short ones. Bound the archive by bytes too.
 KEEP_BYTES = 200 * 1024 * 1024
-REPEAT_MAX = 5             # most a single repeat will read out before summarising
 GAP = float(os.environ.get("VAIKHARI_GAP", "3.0"))   # silence between utterances
 # A hook-generated message is suppressed if the same session said something
 # deliberate this recently. Claude summarising its own work and then a hook
@@ -53,6 +54,7 @@ AUTO_WINDOW = float(os.environ.get("VAIKHARI_AUTO_WINDOW", "120"))
 # re-emits "is waiting for your input" while it sits idle; hearing it five
 # times tells you nothing the first one did not.
 AUTO_DEDUP = float(os.environ.get("VAIKHARI_AUTO_DEDUP", "600"))
+TRACE = os.environ.get("VAIKHARI_TRACE") == "1"   # log every playback start/end
 
 # All 28 English voices, ordered by two criteria at once: the model card's
 # quality grade (best first, so a handful of sessions all get good voices) and
@@ -105,7 +107,8 @@ _current = None
 _current_lock = threading.Lock()
 _db_lock = threading.RLock()
 _db = None
-_last_repeat = 0.0
+_last_drain_end = 0.0
+_drain_pending = 0
 _last_play_end = 0.0
 _last_manual = {}
 _last_auto = {}
@@ -118,6 +121,13 @@ def gap():
     remaining = GAP - (time.time() - _last_play_end)
     if remaining > 0:
         time.sleep(remaining)
+
+
+def trace(msg):
+    """Playback tracing, off by default. Overlapping audio is the one bug you
+    cannot diagnose after the fact, so leave the instrument in the drawer."""
+    if TRACE:
+        log(msg)
 
 
 def log(msg):
@@ -440,6 +450,7 @@ def play_pcm(pcm):
     proc = subprocess.Popen(
         ["pw-play", "--format=s16", f"--rate={SAMPLE_RATE}", "--channels=1", "-"],
         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    trace(f"play start pid={proc.pid} thread={threading.current_thread().name}")
     with _current_lock:
         _current = proc
     try:
@@ -452,6 +463,7 @@ def play_pcm(pcm):
         with _current_lock:
             if _current is proc:
                 _current = None
+        trace(f"play end pid={proc.pid}")
         _last_play_end = time.time()
 
 
@@ -482,6 +494,8 @@ def speak(job):
                      "--channels=1", "-"],
                     stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL)
+                trace(f"speak start pid={proc.pid} "
+                      f"thread={threading.current_thread().name} {text[:30]!r}")
                 with _current_lock:
                     _current = proc
             proc.stdin.write(pcm.tobytes())
@@ -497,6 +511,7 @@ def speak(job):
             with _current_lock:
                 if _current is proc:
                     _current = None
+            trace(f"speak end pid={proc.pid}")
             _last_play_end = time.time()
 
     if not parts:
@@ -508,8 +523,6 @@ def speak(job):
         return
     if ephemeral:
         return
-    global _last_repeat
-    _last_repeat = time.time()   # a new message restarts the nag clock
     store({
         "id": f"{int(time.time()*1000)}-{os.urandom(3).hex()}",
         "ts": time.time(),
@@ -522,55 +535,47 @@ def speak(job):
 
 
 def drain_inbox():
-    """Speak everything unplayed, oldest first, marking as it goes so an
-    interruption doesn't replay what you already heard."""
-    global _last_repeat
+    """Speak everything undismissed, oldest first. No cap: a message repeats
+    until you dismiss it, and dismissing is how you make it stop."""
     with _db_lock:
         rows = db().execute(
             "SELECT id,audio FROM utterances WHERE dismissed=0 "
             "ORDER BY ts ASC").fetchall()
-    # Guard against a wall of speech: read the newest few, then say how many
-    # more are stacked up rather than working through twenty of them.
-    if len(rows) > REPEAT_MAX:
-        skipped = len(rows) - REPEAT_MAX
-        rows = rows[-REPEAT_MAX:]
-    else:
-        skipped = 0
     for uid, blob in rows:
+        if not blob:
+            continue                           # audio expired; text still kept
         play_pcm(blob[44:])                    # strip the 44-byte WAV header
         mark_played([uid])
-    if skipped:
-        speak({"text": f"And {skipped} more waiting.", "voice": DEFAULT_VOICE,
-               "speed": 1.0, "session": "", "out": None, "ephemeral": True})
-    _last_repeat = time.time()
+
+
+def queue_drain():
+    """Every drain goes through here so the repeater can see one is already
+    queued or speaking. A drain runs for as long as it takes to say everything,
+    which is easily longer than the poll interval."""
+    global _drain_pending
+    _drain_pending += 1
+    submit({"kind": "drain"})
 
 
 def repeater():
-    """Re-speak the inbox on an interval so a message you missed does not sit
-    there silently. Paused while muted — mute means do not make noise, and a
-    reminder is still noise."""
-    global _last_repeat
+    """Drain the inbox every N minutes, timed from the end of the last drain.
+
+    Deliberately coarse. Timing it from each message's arrival instead meant a
+    busy inbox never repeated at all, because new arrivals kept pushing the
+    clock forward. Paused while muted: mute means make no noise, and a
+    reminder is noise."""
     while True:
         time.sleep(15)
         try:
             p = prefs()
             if not p["repeat_enabled"] or is_muted() or not pending_count():
                 continue
-            # Base the interval on the newest undismissed message as well as
-            # the last repeat, so a message is never nagged sooner than the
-            # interval after it arrived. Reading it from the table beats a
-            # global that only some code paths remember to update.
-            with _db_lock:
-                newest = db().execute(
-                    "SELECT MAX(ts) FROM utterances WHERE dismissed=0").fetchone()[0] or 0
-            if time.time() - max(_last_repeat, newest) < p["repeat_minutes"] * 60:
+            if _drain_pending:                 # already queued or speaking
+                continue
+            if time.time() - _last_drain_end < p["repeat_minutes"] * 60:
                 continue
             log(f"repeating {pending_count()} undismissed")
-            # Stamp before enqueueing, not after draining. A drain can take
-            # minutes; without this the 15s poll queues another drain, and
-            # another, for as long as the first one is still speaking.
-            _last_repeat = time.time()
-            submit({"kind": "drain"})
+            queue_drain()
         except Exception as exc:
             log(f"repeater: {type(exc).__name__}: {exc}")
 
@@ -589,11 +594,18 @@ def stop_current():
 def worker():
     """Single consumer: overlapping notifications queue up instead of talking
     over each other."""
+    global _last_drain_end, _drain_pending
     while True:
         job, done = _jobs.get()
         try:
             if job.get("kind") == "drain":
-                drain_inbox()
+                try:
+                    drain_inbox()
+                finally:
+                    # Stamp at the end, so the next repeat is N minutes after
+                    # this one stopped talking rather than after it started.
+                    _last_drain_end = time.time()
+                    _drain_pending = max(0, _drain_pending - 1)
             elif job.get("kind") == "replay":
                 blob = audio_of(job["id"])
                 if blob:
@@ -651,7 +663,7 @@ def handle(conn):
             return reply({"ok": True, "muted": is_muted()})
 
         if req.get("play_pending"):
-            submit({"kind": "drain"}, wait=req.get("wait"))
+            queue_drain()
             return reply({"ok": True})
 
         if req.get("replay"):
@@ -862,7 +874,7 @@ class UI(BaseHTTPRequestHandler):
             stop_current()
             return self._send(200, "application/json", b'{"ok":true}')
         if self.path == "/api/drain":
-            submit({"kind": "drain"})
+            queue_drain()
             return self._send(200, "application/json", b'{"ok":true}')
         if self.path == "/api/mute":
             n = int(self.headers.get("Content-Length") or 0)
@@ -918,6 +930,21 @@ def serve_ui():
 
 def main():
     os.makedirs(STATE, exist_ok=True)
+
+    # Exactly one daemon, whoever starts it. `say` auto-starts one when it
+    # cannot connect, and a systemd restart leaves a ~14s window with no
+    # socket, so a hook firing in that window used to spawn a second daemon.
+    # It would then unlink and steal the socket while the first kept its own
+    # repeater running — two processes speaking over each other. Taken before
+    # the model loads, so the loser costs nothing.
+    lock = open(os.path.join(STATE, "daemon.lock"), "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        log("another daemon holds the lock; exiting")
+        return 0
+    globals()["_lock"] = lock          # hold it open for the process lifetime
+
     db()
     log(f"loading kokoro on {DEVICE} ...")
     pipeline_for(DEFAULT_VOICE)
@@ -932,6 +959,7 @@ def main():
     srv.bind(SOCKET_PATH)
     os.chmod(SOCKET_PATH, 0o600)
     srv.listen(16)
+    signal.signal(signal.SIGTERM, lambda *_: (stop_current(), sys.exit(0)))
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=serve_ui, daemon=True).start()
     # Sweep zombies: a session whose SessionEnd hook never fired (crash, kill
@@ -946,8 +974,8 @@ def main():
     if n:
         log(f"released {n} stale session(s) older than 24h")
 
-    global _last_repeat
-    _last_repeat = time.time()      # don't nag the instant the daemon restarts
+    global _last_drain_end
+    _last_drain_end = time.time()   # don't nag the instant the daemon restarts
     threading.Thread(target=repeater, daemon=True).start()
     p = prefs()
     log(f"ready on {SOCKET_PATH} (muted={is_muted()}, inbox={pending_count()}, "
@@ -960,6 +988,10 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        # Do not leave a player behind: an orphaned pw-play keeps talking over
+        # whatever starts next, which is exactly the overlap this is meant to
+        # prevent.
+        stop_current()
         if os.path.exists(SOCKET_PATH):
             os.unlink(SOCKET_PATH)
 
