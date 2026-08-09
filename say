@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""Speak text with Kokoro. Drop-in upgrade for `spd-say`.
+
+  say "build finished"            fire and forget
+  echo hi | say                   read stdin
+  say -w "done"                   block until playback ends
+  say -S <id> --cwd <dir> "hi"   speak as a session (auto-registers a voice)
+  say -v bm_george "hello"        override the voice
+  say --mute / --unmute           global mute; muted messages queue in the inbox
+  say --inbox                     speak everything that queued while muted
+  say --status                    muted? how many waiting? UI url
+  say --stop                      shut it up
+  say --voices                    list all 28 English voices
+  say --pin bm_george             pin this project to a voice (survives restarts)
+  say --unpin                     drop the pin, back to automatic allocation
+  say --pins                      list pinned projects
+  say --ui                        open the review UI
+
+Deliberately stdlib-only: this is the hot path, and importing torch here
+would put the 10s cold start back on every call. The model lives in the
+daemon, which this auto-starts on first use.
+"""
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+VENV = os.environ.get("KOKORO_VENV", os.path.expanduser("~/.local/share/kokoro-say-venv"))
+DAEMON = os.path.join(HERE, "kokoro_sayd.py")
+SOCKET_PATH = os.environ.get("KOKORO_SOCKET") or os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "kokoro-say.sock")
+STATE = os.path.expanduser("~/.local/state/kokoro-say")
+UI_URL = "http://127.0.0.1:%s" % os.environ.get("KOKORO_UI_PORT", "8765")
+
+# name, accent/gender, model-card quality grade. Allocation walks this order,
+# so the best-graded voices get used first.
+VOICES = [
+    ("af_heart", "American female", "A"),
+    ("bm_george", "British male", "C"),
+    ("af_bella", "American female", "A-"),
+    ("am_michael", "American male", "C+"),
+    ("bf_emma", "British female", "B-"),
+    ("am_fenrir", "American male", "C+"),
+    ("af_nicole", "American female", "B-"),
+    ("bm_fable", "British male", "C"),
+    ("af_aoede", "American female", "C+"),
+    ("am_puck", "American male", "C+"),
+    ("bf_isabella", "British female", "C"),
+    ("af_kore", "American female", "C+"),
+    ("bm_lewis", "British male", "D+"),
+    ("af_sarah", "American female", "C+"),
+    ("am_onyx", "American male", "D"),
+    ("af_nova", "American female", "C"),
+    ("bf_lily", "British female", "D"),
+    ("am_eric", "American male", "D"),
+    ("af_sky", "American female", "C-"),
+    ("bm_daniel", "British male", "D"),
+    ("am_liam", "American male", "D"),
+    ("af_alloy", "American female", "C"),
+    ("bf_alice", "British female", "D"),
+    ("am_echo", "American male", "D"),
+    ("af_jessica", "American female", "D"),
+    ("af_river", "American female", "D"),
+    ("am_adam", "American male", "F+"),
+    ("am_santa", "American male", "D-"),
+]
+
+
+def connect(timeout=2.0):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect(SOCKET_PATH)
+    return s
+
+
+def ensure_daemon():
+    try:
+        return connect()
+    except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError):
+        pass
+    os.makedirs(STATE, exist_ok=True)
+    sys.stderr.write("say: starting kokoro daemon (one-time ~10s)...\n")
+    with open(os.path.join(STATE, "daemon.log"), "ab") as logf:
+        subprocess.Popen([os.path.join(VENV, "bin", "python"), DAEMON],
+                         stdout=logf, stderr=subprocess.STDOUT,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+    for _ in range(600):                       # up to 60s for the first model load
+        time.sleep(0.1)
+        try:
+            return connect()
+        except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError):
+            continue
+    sys.exit(f"say: daemon failed to start; see {STATE}/daemon.log")
+
+
+def send(req):
+    with ensure_daemon() as sock:
+        sock.settimeout(610)
+        sock.sendall((json.dumps(req) + "\n").encode())
+        line = sock.makefile("rb").readline()
+    res = json.loads(line) if line else {"ok": True}
+    if not res.get("ok"):
+        sys.exit("say: %s" % res.get("error"))
+    return res
+
+
+def main(argv):
+    voice = os.environ.get("KOKORO_VOICE")
+    session = os.environ.get("KOKORO_SESSION", "")
+    speed, wait, out, words, action, cwd = 1.0, False, None, [], None, None
+    i = 0
+    # Parse everything before acting, so flag order never matters
+    # (`say --inbox -w` and `say -w --inbox` mean the same thing).
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-v", "--voice"):
+            i += 1; voice = argv[i]
+        elif a in ("-s", "--speed"):
+            i += 1; speed = float(argv[i])
+        elif a in ("-S", "--session"):
+            i += 1; session = argv[i]
+        elif a == "--cwd":
+            i += 1; cwd = argv[i]
+        elif a in ("-w", "--wait"):
+            wait = True
+        elif a in ("-o", "--out"):
+            i += 1; out = os.path.abspath(argv[i]); wait = True
+        elif a in ("--stop", "--mute", "--unmute", "--inbox", "--status",
+                   "--ui", "--voices", "--sessions", "--register",
+                   "--unregister", "--preview", "--pin", "--unpin", "--pins"):
+            action = a
+        elif a in ("-h", "--help"):
+            print(__doc__); return 0
+        else:
+            words.append(a)
+        i += 1
+
+    if action == "--stop":
+        send({"stop": True}); return 0
+    if action == "--mute":
+        send({"mute": True}); print("muted"); return 0
+    if action == "--unmute":
+        send({"mute": False}); print("unmuted"); return 0
+    if action == "--inbox":
+        send({"play_pending": True, "wait": wait}); return 0
+    if action == "--status":
+        r = send({"status": True})
+        print(f"{'muted' if r['muted'] else 'unmuted'}, "
+              f"{r['pending']} waiting  |  {r['ui']}")
+        return 0
+    if action == "--ui":
+        subprocess.Popen(["xdg-open", UI_URL], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+        print(UI_URL); return 0
+    if action == "--voices":
+        for name, desc, grade in VOICES:
+            print(f"  {name:<13} {desc:<17} {grade}")
+        return 0
+    if action == "--sessions":
+        for s in send({"sessions": True})["sessions"]:
+            state = "ended " if s["ended"] else "LIVE  "
+            print(f"  {state} {s['label']:<20} {s['voice']:<12} {s['cwd']}")
+        return 0
+    if action == "--register":
+        r = send({"register": {"sid": session or os.environ.get("CLAUDE_SESSION_ID", ""),
+                               "cwd": " ".join(words) or os.getcwd()}})
+        print(f"{r['label']} -> {r['voice']}")
+        return 0
+    if action == "--unregister":
+        key = session or os.environ.get("CLAUDE_SESSION_ID") or os.getcwd()
+        r = send({"unregister": key})
+        print(f"released {r.get('freed', 0)} session(s)")
+        return 0
+    if action == "--pin":
+        v = voice or (words[0] if words else None)
+        if not v:
+            sys.exit("say: --pin needs a voice, e.g. say --pin bm_george")
+        r = send({"pin": {"cwd": cwd or os.getcwd(), "voice": v}})
+        print(f"pinned {r['project']} -> {r['voice']}")
+        return 0
+    if action == "--unpin":
+        r = send({"pin": {"cwd": cwd or os.getcwd(), "pinned": False}})
+        print(f"unpinned {r['project']}")
+        return 0
+    if action == "--pins":
+        pins = send({"pins": True})["pins"]
+        print("\n".join(f"  {p['project']:<20} {p['voice']}" for p in pins) or "  (none)")
+        return 0
+    if action == "--preview":
+        send({"preview": voice or "af_heart",
+              "text": " ".join(words) or None, "wait": wait})
+        return 0
+
+    text = (" ".join(words) if words else sys.stdin.read()).strip()
+    if not text:
+        return 0
+    send({"text": text, "voice": voice, "speed": speed, "session": session,
+          "cwd": cwd, "wait": wait, "out": out})
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
