@@ -57,9 +57,10 @@ Break these and the thing stops being useful:
 6. **`dismissed` and `played` are separate axes.** Heard-but-not-acted-on
    still sits in the inbox. Conflating them breaks repeat.
 
-7. **The HTTP server has no auth.** It is safe only because it binds
-   `127.0.0.1`. Never widen the bind without adding a token first — the
-   message text is genuinely sensitive. See `docs/REMOTE.md`.
+7. **Off loopback, the UI requires a token** (`VAIKHARI_NO_AUTH=1` opts out
+   for a trusted network, and the daemon then warns at every start). Bind and
+   advertised host are separate settings: binding to one LAN address kills
+   `127.0.0.1`, where the desktop UI and `say --ui` look. Bind `0.0.0.0`.
 
 8. **`--auto` means skippable, not automatic.** Hook messages use it so a
    session that already spoke deliberately does not get announced twice. The

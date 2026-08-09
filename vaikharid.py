@@ -17,6 +17,7 @@ import fcntl
 import json
 import os
 import queue
+import secrets
 import signal
 import socket
 import sqlite3
@@ -37,6 +38,16 @@ SOCKET_PATH = os.environ.get("VAIKHARI_SOCKET") or os.path.join(
 STATE = os.path.expanduser("~/.local/state/vaikhari")
 DB_PATH = os.path.join(STATE, "vaikhari.db")
 UI_PORT = int(os.environ.get("VAIKHARI_UI_PORT", "8765"))
+# Bind and advertised address are different things: binding to a single LAN
+# address silently breaks 127.0.0.1, which is where the desktop UI and
+# `say --ui` look. Bind 0.0.0.0 to serve both, and advertise a name a phone
+# can actually type.
+BIND = os.environ.get("VAIKHARI_BIND", "127.0.0.1")
+HOST = os.environ.get("VAIKHARI_HOST") or (
+    socket.getfqdn() if BIND == "0.0.0.0" else BIND)
+# Loopback needs no token: reaching it already means local access. Anything
+# else does, because the message text is genuinely sensitive.
+NO_AUTH = os.environ.get("VAIKHARI_NO_AUTH") == "1"
 SAMPLE_RATE = 24000
 DEFAULT_VOICE = os.environ.get("VAIKHARI_VOICE", "af_heart")
 DEVICE = os.environ.get("VAIKHARI_DEVICE", "cuda")
@@ -225,6 +236,15 @@ def setting(key, default=None, value=None):
             return value
         row = db().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
         return row[0] if row else default
+
+
+def ui_token():
+    """Stable per-install token, minted on first use and kept in settings."""
+    tok = setting("ui_token")
+    if not tok:
+        tok = secrets.token_urlsafe(24)
+        setting("ui_token", value=tok)
+    return tok
 
 
 def is_muted():
@@ -711,7 +731,7 @@ def handle(conn):
         if req.get("status"):
             return reply({"ok": True, "muted": is_muted(),
                           "pending": pending_count(),
-                          "ui": f"http://127.0.0.1:{UI_PORT}", **prefs()})
+                          "ui": f"http://{HOST}:{UI_PORT}", **prefs()})
 
         label, voice = resolve_session(req.get("session") or "", req.get("cwd"))
 
@@ -761,6 +781,9 @@ AVATAR_DIR = os.path.join(HERE, "avatars")
 
 
 class UI(BaseHTTPRequestHandler):
+    """Serves the review UI. Requests from anywhere but loopback must carry the
+    token, as a ?token= query (which sets a cookie and redirects, so a phone is
+    enrolled by opening one link), a cookie, or a bearer header."""
     # HTTP/1.1 for keep-alive: mobile media clients open a connection per
     # range and 1.0 makes them reconnect for every chunk. Safe here because
     # every response sets an accurate Content-Length.
@@ -779,7 +802,48 @@ class UI(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _authorised(self):
+        if NO_AUTH or self.client_address[0] in ("127.0.0.1", "::1"):
+            return True
+        want = ui_token()
+        got = ""
+        if "token=" in self.path:
+            got = self.path.split("token=", 1)[1].split("&")[0]
+        if not got:
+            auth = self.headers.get("Authorization", "")
+            if auth.startswith("Bearer "):
+                got = auth[7:]
+        if not got:
+            for part in (self.headers.get("Cookie") or "").split(";"):
+                k, _, v = part.strip().partition("=")
+                if k == "vaikhari":
+                    got = v
+        return bool(got) and secrets.compare_digest(got, want)
+
+    def _gate(self):
+        """Returns True if the request was handled here (rejected or
+        redirected) and the caller should stop."""
+        if self._authorised():
+            # Enrol: swap ?token= for a cookie so the URL can be dropped.
+            if "token=" in self.path and self.command == "GET":
+                self.send_response(302)
+                self.send_header("Location", "/")
+                self.send_header(
+                    "Set-Cookie",
+                    f"vaikhari={ui_token()}; Max-Age=31536000; Path=/; "
+                    f"SameSite=Lax; HttpOnly")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return True
+            return False
+        self._send(401, "text/plain; charset=utf-8",
+                   b"Code Vaikhari: token required.\n"
+                   b"Open the URL printed in the daemon log.\n")
+        return True
+
     def do_GET(self):
+        if self._gate():
+            return
         if self.path in ("/", "/index.html"):
             with open(UI_HTML) as fh:          # read per request, so editing
                 page = fh.read()               # ui.html needs no restart
@@ -870,6 +934,8 @@ class UI(BaseHTTPRequestHandler):
             pass
 
     def do_POST(self):
+        if self._gate():
+            return
         if self.path == "/api/stop":
             stop_current()
             return self._send(200, "application/json", b'{"ok":true}')
@@ -918,11 +984,20 @@ class UI(BaseHTTPRequestHandler):
 
 def serve_ui():
     try:
-        srv = ThreadingHTTPServer(("127.0.0.1", UI_PORT), UI)
+        srv = ThreadingHTTPServer((BIND, UI_PORT), UI)
     except OSError as exc:
         log(f"UI disabled ({exc})")
         return
-    log(f"UI on http://127.0.0.1:{UI_PORT}")
+    if BIND in ("127.0.0.1", "::1", "localhost"):
+        log(f"UI on http://{HOST}:{UI_PORT}")
+    elif NO_AUTH:
+        log(f"UI on http://{HOST}:{UI_PORT}  *** NO AUTH — anyone on this "
+            f"network can read and control it ***")
+    else:
+        # Printed every start, so the enrolment link is never hunted for.
+        log(f"UI on http://{HOST}:{UI_PORT} (loopback exempt from the token)")
+        log(f"  enrol a device once: "
+            f"http://{HOST}:{UI_PORT}/?token={ui_token()}")
     srv.serve_forever()
 
 

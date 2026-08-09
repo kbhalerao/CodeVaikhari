@@ -273,6 +273,9 @@ Read by both client and daemon:
 | `VAIKHARI_VOICE` | default voice (`af_heart`) |
 | `VAIKHARI_DEVICE` | `cuda` or `cpu` |
 | `VAIKHARI_UI_PORT` | UI port (8765) |
+| `VAIKHARI_BIND` | address to bind (`127.0.0.1`; use `0.0.0.0` for LAN) |
+| `VAIKHARI_HOST` | name to advertise in logs and `--status` |
+| `VAIKHARI_NO_AUTH` | `1` to skip the token on a trusted network |
 | `VAIKHARI_GAP` | silence between utterances, seconds (3.0) |
 | `VAIKHARI_AUTO_WINDOW` | suppress a hook message this long after a manual one (120s) |
 | `VAIKHARI_AUTO_DEDUP` | suppress an identical hook message within this long (600s) |
@@ -295,6 +298,28 @@ directly: `pw-play --format=s16 --rate=24000 --channels=1 - < /dev/zero`.
 
 **Logs.** `journalctl --user -u vaikhari -f`, or
 `~/.local/state/vaikhari/daemon.log` when started without systemd.
+
+## Serving it on a LAN
+
+```
+VAIKHARI_BIND=0.0.0.0 VAIKHARI_HOST=yourbox.local
+```
+
+Bind and advertised address are separate on purpose: binding to a single LAN
+address silently kills `127.0.0.1`, which is where the desktop UI and
+`say --ui` look. Bind `0.0.0.0` to serve both.
+
+Off loopback the UI requires a token by default. It is minted on first use and
+printed at every start as a one-tap enrolment link (`/?token=…`) that sets a
+cookie, so a phone is enrolled by opening the URL once. Loopback is exempt.
+
+On a network you trust, `VAIKHARI_NO_AUTH=1` turns it off; the daemon then
+says so loudly at every start. The message text is what is at stake — it
+routinely contains project names, paths, and things like "migration needs your
+approval before it runs against production".
+
+The rail collapses (☰, next to *Inbox*) and stays collapsed, defaulting to
+collapsed on a phone where 376px of sessions leaves no room for the inbox.
 
 ## Remote access
 
