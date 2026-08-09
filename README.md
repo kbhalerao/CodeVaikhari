@@ -160,9 +160,11 @@ through intact — misaki chunks on a token budget, not just on punctuation, so
 run-on text is not truncated.
 
 The cost is archive size: audio is stored at 48 KB/s, so that 198 s message is
-~9.5 MB. The archive is bounded two ways — the last 250 dismissed messages,
-and a 200 MB byte budget, oldest dismissed dropped first. The inbox is exempt
-from both; an undismissed message is not backlog.
+~9.5 MB. Text is ~100 bytes and audio is not, so they do not share a fate —
+**message text is kept forever** and only the audio expires, bounded two ways:
+the last 250 dismissed messages keep theirs, under a 200 MB ceiling, oldest
+first. Expired messages stay in the log and in search, marked "audio expired";
+you lose replay, not the record. The inbox is exempt from both.
 
 ## Storage
 
