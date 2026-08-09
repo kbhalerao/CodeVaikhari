@@ -4,6 +4,7 @@
   say "build finished"            fire and forget
   echo hi | say                   read stdin
   say -w "done"                   block until playback ends
+  say --auto "..."                skippable: dropped if this session just spoke
   say -S <id> --cwd <dir> "hi"   speak as a specific session
                                   (inside Claude Code this is automatic)
   say -v bm_george "hello"        override the voice
@@ -119,7 +120,7 @@ def main(argv):
     session = (os.environ.get("VAIKHARI_SESSION")
                or os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
     speed, wait, out, words, action, cwd = 1.0, False, None, [], None, None
-    explicit_cwd = False
+    explicit_cwd = auto = False
     i = 0
     # Parse everything before acting, so flag order never matters
     # (`say --inbox -w` and `say -w --inbox` mean the same thing).
@@ -133,6 +134,8 @@ def main(argv):
             i += 1; session = argv[i]
         elif a == "--cwd":
             i += 1; cwd = argv[i]; explicit_cwd = True
+        elif a == "--auto":
+            auto = True
         elif a in ("-w", "--wait"):
             wait = True
         elif a in ("-o", "--out"):
@@ -224,7 +227,8 @@ def main(argv):
     # Always tell the daemon where we are: an unregistered session can then
     # self-register, and a plain shell call still lands on the project's voice.
     send({"text": text, "voice": voice, "speed": speed, "session": session,
-          "cwd": cwd if explicit_cwd else os.getcwd(), "wait": wait, "out": out})
+          "cwd": cwd if explicit_cwd else os.getcwd(), "wait": wait, "out": out,
+          "auto": auto})
     return 0
 
 

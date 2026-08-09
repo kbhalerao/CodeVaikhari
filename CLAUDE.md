@@ -51,6 +51,11 @@ Break these and the thing stops being useful:
    `127.0.0.1`. Never widen the bind without adding a token first — the
    message text is genuinely sensitive. See `docs/REMOTE.md`.
 
+8. **`--auto` means skippable, not automatic.** Hook messages use it so a
+   session that already spoke deliberately does not get announced twice. The
+   window is tracked in `_last_manual` at enqueue time, not read from the
+   utterances table, because rows are written when playback ends.
+
 ## Gotchas
 
 - **`pkill -f vaikharid` matches its own shell** when the pattern appears in

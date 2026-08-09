@@ -45,6 +45,10 @@ KEEP_PLAYED = 250          # dismissed utterances that keep their audio
 KEEP_BYTES = 200 * 1024 * 1024
 REPEAT_MAX = 5             # most a single repeat will read out before summarising
 GAP = float(os.environ.get("VAIKHARI_GAP", "3.0"))   # silence between utterances
+# A hook-generated message is suppressed if the same session said something
+# deliberate this recently. Claude summarising its own work and then a hook
+# announcing the same conclusion is the same news twice.
+AUTO_WINDOW = float(os.environ.get("VAIKHARI_AUTO_WINDOW", "120"))
 
 # All 28 English voices, ordered by two criteria at once: the model card's
 # quality grade (best first, so a handful of sessions all get good voices) and
@@ -99,6 +103,7 @@ _db_lock = threading.RLock()
 _db = None
 _last_repeat = 0.0
 _last_play_end = 0.0
+_last_manual = {}
 
 
 def gap():
@@ -687,6 +692,18 @@ def handle(conn):
                           "ui": f"http://127.0.0.1:{UI_PORT}", **prefs()})
 
         label, voice = resolve_session(req.get("session") or "", req.get("cwd"))
+
+        # Tracked at enqueue, not from the utterances table: rows are written
+        # when playback *ends*, so a manual message still being spoken would
+        # not be visible yet and the hook right behind it would slip through.
+        if req.get("auto"):
+            since = time.time() - _last_manual.get(label, 0)
+            if since < AUTO_WINDOW:
+                log(f"suppressed auto for {label} ({since:.0f}s after a manual)")
+                return reply({"ok": True, "suppressed": True})
+        else:
+            _last_manual[label] = time.time()
+
         submit({
             "text": req.get("text", ""),
             "session": label,

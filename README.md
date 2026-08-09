@@ -60,6 +60,7 @@ git clone https://github.com/<you>/CodeVaikhari && cd CodeVaikhari
 say "build finished"            # fire and forget
 echo "long text" | say          # stdin
 say -w "done"                   # block until playback ends
+say --auto "..."                # skippable: dropped if this session just spoke
 say -v bm_george "hello"        # override the voice
 say --voices                    # all 28 English voices, with quality grades
 say -o out.wav "to a file"
@@ -212,7 +213,34 @@ act on still sits in the inbox.
 | `SessionStart` | register the session, take the project's voice |
 | `SessionEnd` | release it |
 | `Notification` | speak what needs attention |
-| `Stop` | "*project* finished" |
+| `Stop` | speak the conclusion of what just happened |
+
+### What Stop actually says
+
+"*project* finished" tells you nothing you did not already know. The
+conclusion is sitting in the transcript the hook is handed, so the hook reads
+it: the last assistant message that is not mid-turn narration, stripped of
+markdown, cut to the first couple of sentences (~200 characters).
+
+In practice that turns *"agwx2026 finished"* into *"Done. Nine branches
+deleted across both repos, all verified merged first. agwx is now clean."*
+
+Because agents lead with the result, the first sentence is almost always the
+useful one. It falls back to "*project* finished" only when there is genuinely
+no prose to read.
+
+### Not saying it twice
+
+Hook messages are sent with `--auto`, which means *skippable*. If the session
+already said something deliberate with `say` in the last 120 seconds
+(`VAIKHARI_AUTO_WINDOW`), the daemon drops the hook message rather than
+announcing the same news again.
+
+So an agent that summarises its own work out loud silences the hook by doing
+so, and one that says nothing still gets announced. The window is tracked at
+enqueue rather than from the archive, because rows are written when playback
+*ends* — a manual message still being spoken would otherwise be invisible to
+the hook right behind it.
 
 All hooks are fire-and-forget. They never add latency to a session, and a TTS
 failure never breaks Claude Code.
@@ -227,6 +255,7 @@ Read by both client and daemon:
 | `VAIKHARI_DEVICE` | `cuda` or `cpu` |
 | `VAIKHARI_UI_PORT` | UI port (8765) |
 | `VAIKHARI_GAP` | silence between utterances, seconds (3.0) |
+| `VAIKHARI_AUTO_WINDOW` | suppress a hook message this long after a manual one (120s) |
 | `VAIKHARI_SOCKET` | socket path |
 | `VAIKHARI_VENV` | venv location |
 
