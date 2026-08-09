@@ -52,7 +52,11 @@ Break these and the thing stops being useful:
    broken TTS setup must not break the user's coding session.
 
 5. **The inbox is not backlog.** Pruning only ever touches `dismissed=1` rows.
-   An undismissed message is never dropped, by count or by byte budget.
+   An undismissed message is never dropped, by count or by byte budget. One
+   retention rule, not three: newest 50 dismissed, under a 100 MB audio cap,
+   deleted outright. Resist adding a second axis — it was three overlapping
+   ones plus an "audio expired, text kept" state, which is an archive's
+   design, not a notifier's.
 
 6. **`dismissed` and `played` are separate axes.** Heard-but-not-acted-on
    still sits in the inbox. Conflating them breaks repeat.

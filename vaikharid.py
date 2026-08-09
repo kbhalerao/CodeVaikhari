@@ -51,14 +51,12 @@ NO_AUTH = os.environ.get("VAIKHARI_NO_AUTH") == "1"
 SAMPLE_RATE = 24000
 DEFAULT_VOICE = os.environ.get("VAIKHARI_VOICE", "af_heart")
 DEVICE = os.environ.get("VAIKHARI_DEVICE", "cuda")
-KEEP_PLAYED = 250          # dismissed utterances that keep their audio
-# Text length is effectively unbounded (a 3,000-char passage synthesizes fine,
-# ~198s of audio), but audio is archived as a BLOB at 48 KB/s, so a few long
-# messages can outweigh hundreds of short ones. Bound the archive by bytes too.
-KEEP_BYTES = 200 * 1024 * 1024
-# Dismissed rows are deleted outright after this long. Text is cheap but not
-# free, and a log nobody will ever read is just a bigger file to VACUUM.
-KEEP_DAYS = float(os.environ.get("VAIKHARI_KEEP_DAYS", "30"))
+# This is a notifier, not an archive. A dismissed message is done with; keep
+# just enough of them to replay one you cleared by mistake, and delete the
+# rest outright — audio and text together. The byte cap is the backstop for
+# the rare very long message, since audio is 48 KB/s and text is nothing.
+KEEP_DISMISSED = int(os.environ.get("VAIKHARI_KEEP", "50"))
+KEEP_BYTES = int(os.environ.get("VAIKHARI_KEEP_BYTES", str(100 * 1024 * 1024)))
 GAP = float(os.environ.get("VAIKHARI_GAP", "3.0"))   # silence between utterances
 # A hook-generated message is suppressed if the same session said something
 # deliberate this recently. Claude summarising its own work and then a hook
@@ -423,23 +421,30 @@ def store(entry, pcm):
             (entry["id"], entry["ts"], entry["session"], entry["voice"],
              entry["text"], entry["dur"], entry["played"], wav_bytes(pcm)))
         # Prune dismissed history only; the inbox is not backlog.
-        # Text is ~100 bytes and worth keeping forever; audio is 48 KB/s and
-        # is not. So expiry blanks the blob and leaves the row — the log stays
-        # complete and searchable, only replay of old messages is lost.
+        prune()
+
+
+def prune():
+    """Keep the newest KEEP_DISMISSED dismissed messages, under KEEP_BYTES of
+    audio. Everything else goes. The inbox is exempt: an undismissed message
+    is not backlog, at any age or size."""
+    with _db_lock:
         db().execute(
-            "UPDATE utterances SET audio=x'' WHERE dismissed=1 AND LENGTH(audio)>0 "
-            "AND id NOT IN (SELECT id FROM utterances WHERE dismissed=1 "
-            "AND LENGTH(audio)>0 ORDER BY ts DESC LIMIT ?)", (KEEP_PLAYED,))
+            "DELETE FROM utterances WHERE dismissed=1 AND id NOT IN "
+            "(SELECT id FROM utterances WHERE dismissed=1 "
+            " ORDER BY ts DESC LIMIT ?)", (KEEP_DISMISSED,))
         total = db().execute(
             "SELECT COALESCE(SUM(LENGTH(audio)),0) FROM utterances").fetchone()[0]
         if total > KEEP_BYTES:
             for uid, n in db().execute(
                     "SELECT id,LENGTH(audio) FROM utterances WHERE dismissed=1 "
-                    "AND LENGTH(audio)>0 ORDER BY ts ASC"):
-                db().execute("UPDATE utterances SET audio=x'' WHERE id=?", (uid,))
+                    "ORDER BY ts ASC"):
+                db().execute("DELETE FROM utterances WHERE id=?", (uid,))
                 total -= n
                 if total <= KEEP_BYTES:
                     break
+        # Leftovers from when expiry blanked the blob instead of deleting.
+        db().execute("DELETE FROM utterances WHERE dismissed=1 AND LENGTH(audio)=0")
         db().commit()
 
 
@@ -453,11 +458,9 @@ def mark_played(ids):
 def history(limit=120):
     with _db_lock:
         rows = db().execute(
-            "SELECT id,ts,session,voice,text,dur,played,dismissed,"
-            "LENGTH(audio)>0 FROM utterances ORDER BY ts DESC LIMIT ?",
-            (limit,)).fetchall()
-    keys = ("id", "ts", "session", "voice", "text", "dur", "played", "dismissed",
-            "audio")
+            "SELECT id,ts,session,voice,text,dur,played,dismissed FROM utterances "
+            "ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
+    keys = ("id", "ts", "session", "voice", "text", "dur", "played", "dismissed")
     return [dict(zip(keys, r)) for r in rows]
 
 
@@ -594,27 +597,25 @@ def queue_drain():
 
 
 def maintenance():
-    """Hourly tidy: drop dismissed rows past the retention window and reclaim
-    the pages that expiring audio blobs left behind. The inbox is untouched."""
+    """Hourly: apply the same retention as a new message would, and reclaim
+    pages. Needed because pruning otherwise only happens when something new
+    arrives, and a quiet machine would sit on whatever it last held."""
     while True:
         time.sleep(3600)
         try:
-            cutoff = time.time() - KEEP_DAYS * 86400
+            before = db().execute("SELECT COUNT(*) FROM utterances").fetchone()[0]
+            prune()
             with _db_lock:
-                n = db().execute(
-                    "DELETE FROM utterances WHERE dismissed=1 AND ts < ?",
-                    (cutoff,)).rowcount
-                # Sessions that ended long ago and have nothing left to show.
                 db().execute(
-                    "DELETE FROM sessions WHERE ended IS NOT NULL AND ended < ? "
-                    "AND sid NOT IN (SELECT DISTINCT session FROM utterances)",
-                    (cutoff,))
+                    "DELETE FROM sessions WHERE ended IS NOT NULL "
+                    "AND sid NOT IN (SELECT DISTINCT session FROM utterances)")
                 db().commit()
-                if n:
+                after = db().execute(
+                    "SELECT COUNT(*) FROM utterances").fetchone()[0]
+                if after < before:
                     db().execute("VACUUM")
-            if n:
-                log(f"maintenance: dropped {n} dismissed older than "
-                    f"{KEEP_DAYS:g}d, vacuumed")
+            if after < before:
+                log(f"maintenance: dropped {before - after}, vacuumed")
         except Exception as exc:
             log(f"maintenance: {type(exc).__name__}: {exc}")
 

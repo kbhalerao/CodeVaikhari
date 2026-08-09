@@ -93,7 +93,7 @@ player and a **Dismiss**; dismissed ones fall below a divider. `delete` drops
 a message from the database. The tab title carries the pending count, so a
 background tab still tells you how many are waiting.
 
-Replay never re-synthesizes: the audio is archived with the message.
+Replay never re-synthesizes: the audio is stored with the message.
 
 ## Sessions and voices
 
@@ -167,12 +167,17 @@ No practical text limit. A 3,105-character passage (~480 words) synthesized in
 through intact — misaki chunks on a token budget, not just on punctuation, so
 run-on text is not truncated.
 
-The cost is archive size: audio is stored at 48 KB/s, so that 198 s message is
-~9.5 MB. Text is ~100 bytes and audio is not, so they do not share a fate —
-**message text is kept forever** and only the audio expires, bounded two ways:
-the last 250 dismissed messages keep theirs, under a 200 MB ceiling, oldest
-first. Expired messages stay in the log and in search, marked "audio expired";
-you lose replay, not the record. The inbox is exempt from both.
+The cost is storage: audio is 48 KB/s, so that 198 s message is ~9.5 MB.
+
+This is a notifier, not an archive. A dismissed message is done with, so only
+the newest **50** are kept — enough to replay one you cleared by mistake —
+and the rest are deleted outright, audio and text together. A 100 MB audio
+cap backstops the rare very long message. The inbox is exempt from both: an
+undismissed message is never deleted, at any age or size.
+
+Pruning runs when a message arrives, and hourly regardless, so a quiet
+machine does not sit on whatever it last held. VACUUM runs when something was
+actually removed.
 
 ## Storage
 
@@ -188,9 +193,8 @@ SQLite at `~/.local/state/vaikhari/vaikhari.db`.
 `dismissed` and `played` are separate axes: a message you heard but did not
 act on still sits in the inbox.
 
-An hourly pass deletes dismissed rows older than `VAIKHARI_KEEP_DAYS` (30),
-drops sessions that ended long ago with nothing left to show, and VACUUMs
-when it removed anything. The inbox is never touched, at any age.
+Sessions that have ended and have no messages left are dropped by the same
+hourly pass.
 
 ## Claude Code wiring
 
@@ -300,7 +304,8 @@ Read by both client and daemon:
 | `VAIKHARI_GAP` | silence between utterances, seconds (3.0) |
 | `VAIKHARI_AUTO_WINDOW` | suppress a hook message this long after a manual one (120s) |
 | `VAIKHARI_AUTO_DEDUP` | suppress an identical hook message within this long (600s) |
-| `VAIKHARI_KEEP_DAYS` | delete dismissed messages after this many days (30) |
+| `VAIKHARI_KEEP` | dismissed messages to keep (50) |
+| `VAIKHARI_KEEP_BYTES` | audio ceiling in bytes (100 MB) |
 | `VAIKHARI_SOCKET` | socket path |
 | `VAIKHARI_VENV` | venv location |
 
