@@ -124,6 +124,7 @@ audio{grid-column:1;height:32px;width:100%;max-width:380px}
   font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
   color:var(--faint)}
 .divider:after{content:"";flex:1;height:1px;background:var(--line)}
+.expired{font-size:11.5px;color:var(--faint);font-style:italic;margin-top:6px}
 .empty{text-align:center;color:var(--faint);padding:64px 20px;font-size:14px}
 .empty b{display:block;color:var(--dim);font-size:15.5px;margin-bottom:5px;font-weight:600}
 
@@ -259,8 +260,9 @@ function card(m, pending) {
       ${m.played ? '' : '<span class="unheard">UNHEARD</span>'}
     </div>
     <div class="body">${esc(m.text)}</div>
-    <audio controls preload="none" src="/audio/${m.id}.wav"
-           onplay="fetch('/api/heard/${m.id}',{method:'POST'})"></audio>
+    ${m.audio ? `<audio controls preload="none" src="/audio/${m.id}.wav"
+           onplay="fetch('/api/heard/${m.id}',{method:'POST'})"></audio>`
+              : '<div class="expired">audio expired — text kept</div>'}
     <div class="acts">
       ${pending ? `<button class="dismiss" onclick="dismiss(this,'${m.id}')">Dismiss</button>` : ''}
       <button class="del" onclick="del(this,'${m.id}')" title="Delete permanently">delete</button>

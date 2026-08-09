@@ -38,7 +38,7 @@ UI_PORT = int(os.environ.get("VAIKHARI_UI_PORT", "8765"))
 SAMPLE_RATE = 24000
 DEFAULT_VOICE = os.environ.get("VAIKHARI_VOICE", "af_heart")
 DEVICE = os.environ.get("VAIKHARI_DEVICE", "cuda")
-KEEP_PLAYED = 250          # dismissed utterances retained; the inbox is never pruned
+KEEP_PLAYED = 250          # dismissed utterances that keep their audio
 # Text length is effectively unbounded (a 3,000-char passage synthesizes fine,
 # ~198s of audio), but audio is archived as a BLOB at 48 KB/s, so a few long
 # messages can outweigh hundreds of short ones. Bound the archive by bytes too.
@@ -367,19 +367,20 @@ def store(entry, pcm):
             (entry["id"], entry["ts"], entry["session"], entry["voice"],
              entry["text"], entry["dur"], entry["played"], wav_bytes(pcm)))
         # Prune dismissed history only; the inbox is not backlog.
+        # Text is ~100 bytes and worth keeping forever; audio is 48 KB/s and
+        # is not. So expiry blanks the blob and leaves the row — the log stays
+        # complete and searchable, only replay of old messages is lost.
         db().execute(
-            "DELETE FROM utterances WHERE dismissed=1 AND id NOT IN "
-            "(SELECT id FROM utterances WHERE dismissed=1 ORDER BY ts DESC LIMIT ?)",
-            (KEEP_PLAYED,))
-        # Drop the oldest dismissed rows until the archive fits the byte budget.
-        # The inbox is exempt: an undismissed message is not backlog.
+            "UPDATE utterances SET audio=x'' WHERE dismissed=1 AND LENGTH(audio)>0 "
+            "AND id NOT IN (SELECT id FROM utterances WHERE dismissed=1 "
+            "AND LENGTH(audio)>0 ORDER BY ts DESC LIMIT ?)", (KEEP_PLAYED,))
         total = db().execute(
             "SELECT COALESCE(SUM(LENGTH(audio)),0) FROM utterances").fetchone()[0]
         if total > KEEP_BYTES:
             for uid, n in db().execute(
                     "SELECT id,LENGTH(audio) FROM utterances WHERE dismissed=1 "
-                    "ORDER BY ts ASC"):
-                db().execute("DELETE FROM utterances WHERE id=?", (uid,))
+                    "AND LENGTH(audio)>0 ORDER BY ts ASC"):
+                db().execute("UPDATE utterances SET audio=x'' WHERE id=?", (uid,))
                 total -= n
                 if total <= KEEP_BYTES:
                     break
@@ -396,9 +397,11 @@ def mark_played(ids):
 def history(limit=120):
     with _db_lock:
         rows = db().execute(
-            "SELECT id,ts,session,voice,text,dur,played,dismissed FROM utterances "
-            "ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
-    keys = ("id", "ts", "session", "voice", "text", "dur", "played", "dismissed")
+            "SELECT id,ts,session,voice,text,dur,played,dismissed,"
+            "LENGTH(audio)>0 FROM utterances ORDER BY ts DESC LIMIT ?",
+            (limit,)).fetchall()
+    keys = ("id", "ts", "session", "voice", "text", "dur", "played", "dismissed",
+            "audio")
     return [dict(zip(keys, r)) for r in rows]
 
 
@@ -700,6 +703,11 @@ UI_HTML = os.path.join(os.path.dirname(os.path.realpath(__file__)), "ui.html")
 
 
 class UI(BaseHTTPRequestHandler):
+    # HTTP/1.1 for keep-alive: mobile media clients open a connection per
+    # range and 1.0 makes them reconnect for every chunk. Safe here because
+    # every response sets an accurate Content-Length.
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, format, *args):
         pass
 
@@ -734,8 +742,46 @@ class UI(BaseHTTPRequestHandler):
             uid = os.path.basename(self.path[len("/audio/"):]).removesuffix(".wav")
             blob = audio_of(uid)
             if blob:
-                return self._send(200, "audio/wav", blob)
+                return self._send_audio(blob)
         self._send(404, "text/plain", b"not found")
+
+    def _send_audio(self, blob):
+        """Honour Range requests. Mobile Safari asks for bytes=0- before it
+        will play anything, and refuses a plain 200 for media."""
+        rng = self.headers.get("Range", "")
+        total = len(blob)
+        start, end = 0, total - 1
+        partial = False
+        if rng.startswith("bytes="):
+            spec = rng[6:].split(",")[0].strip()
+            a, _, b = spec.partition("-")
+            try:
+                if a:
+                    start = int(a)
+                    end = int(b) if b else total - 1
+                elif b:                        # suffix form: bytes=-500
+                    start = max(0, total - int(b))
+                partial = True
+            except ValueError:
+                partial = False
+            if start >= total:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{total}")
+                self.end_headers()
+                return
+            end = min(end, total - 1)
+        body = blob[start:end + 1]
+        self.send_response(206 if partial else 200)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(len(body)))
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def do_POST(self):
         if self.path == "/api/stop":
