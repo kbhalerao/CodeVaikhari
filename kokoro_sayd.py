@@ -38,7 +38,13 @@ UI_PORT = int(os.environ.get("KOKORO_UI_PORT", "8765"))
 SAMPLE_RATE = 24000
 DEFAULT_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
 DEVICE = os.environ.get("KOKORO_DEVICE", "cuda")
-KEEP_PLAYED = 250          # already-heard utterances retained; inbox is never pruned
+KEEP_PLAYED = 250          # dismissed utterances retained; the inbox is never pruned
+# Text length is effectively unbounded (a 3,000-char passage synthesizes fine,
+# ~198s of audio), but audio is archived as a BLOB at 48 KB/s, so a few long
+# messages can outweigh hundreds of short ones. Bound the archive by bytes too.
+KEEP_BYTES = 200 * 1024 * 1024
+REPEAT_MAX = 5             # most a single repeat will read out before summarising
+GAP = float(os.environ.get("KOKORO_GAP", "3.0"))   # silence between utterances
 
 # All 28 English voices, ordered by two criteria at once: the model card's
 # quality grade (best first, so a handful of sessions all get good voices) and
@@ -91,6 +97,17 @@ _current = None
 _current_lock = threading.Lock()
 _db_lock = threading.Lock()
 _db = None
+_last_repeat = 0.0
+_last_play_end = 0.0
+
+
+def gap():
+    """Hold the floor between utterances. Enforced as a minimum interval since
+    the last playback ended, not a blanket sleep, so a quiet system still
+    speaks immediately and only back-to-back messages get spaced."""
+    remaining = GAP - (time.time() - _last_play_end)
+    if remaining > 0:
+        time.sleep(remaining)
 
 
 def log(msg):
@@ -133,6 +150,11 @@ def db():
         cols = {r[1] for r in _db.execute("PRAGMA table_info(voices)")}
         if "pinned" not in cols:              # migration for pre-pinning dbs
             _db.execute("ALTER TABLE voices ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+        cols = {r[1] for r in _db.execute("PRAGMA table_info(utterances)")}
+        if "dismissed" not in cols:           # migration for pre-inbox dbs
+            _db.execute("ALTER TABLE utterances "
+                        "ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0")
+            _db.execute("UPDATE utterances SET dismissed=1")
         _db.commit()
     return _db
 
@@ -190,9 +212,45 @@ def is_muted():
 
 
 def pending_count():
+    """The inbox is everything you have not dismissed. `played` is a separate
+    axis — whether it has ever been spoken aloud — so a message you heard but
+    did not act on still counts as waiting."""
     with _db_lock:
         return db().execute(
-            "SELECT COUNT(*) FROM utterances WHERE played=0").fetchone()[0]
+            "SELECT COUNT(*) FROM utterances WHERE dismissed=0").fetchone()[0]
+
+
+def dismiss(ids=None):
+    with _db_lock:
+        if ids is None:
+            n = db().execute("UPDATE utterances SET dismissed=1 "
+                             "WHERE dismissed=0").rowcount
+        else:
+            n = db().executemany(
+                "UPDATE utterances SET dismissed=1 WHERE id=? AND dismissed=0",
+                [(i,) for i in ids]).rowcount
+        db().commit()
+    return n
+
+
+def delete(uid):
+    with _db_lock:
+        n = db().execute("DELETE FROM utterances WHERE id=?", (uid,)).rowcount
+        db().commit()
+    return n
+
+
+def prefs():
+    return {"repeat_enabled": setting("repeat_enabled", "1") == "1",
+            "repeat_minutes": int(setting("repeat_minutes", "10"))}
+
+
+def set_prefs(d):
+    if "repeat_enabled" in d:
+        setting("repeat_enabled", value="1" if d["repeat_enabled"] else "0")
+    if "repeat_minutes" in d:
+        setting("repeat_minutes", value=str(max(1, min(240, int(d["repeat_minutes"])))))
+    return prefs()
 
 
 def register_session(sid, cwd, label=None):
@@ -331,9 +389,21 @@ def store(entry, pcm):
              entry["text"], entry["dur"], entry["played"], wav_bytes(pcm)))
         # Prune heard history only. Anything still unplayed is inbox, not backlog.
         db().execute(
-            "DELETE FROM utterances WHERE played=1 AND id NOT IN "
-            "(SELECT id FROM utterances WHERE played=1 ORDER BY ts DESC LIMIT ?)",
+            "DELETE FROM utterances WHERE dismissed=1 AND id NOT IN "
+            "(SELECT id FROM utterances WHERE dismissed=1 ORDER BY ts DESC LIMIT ?)",
             (KEEP_PLAYED,))
+        # Drop the oldest dismissed rows until the archive fits the byte budget.
+        # The inbox is exempt: an undismissed message is not backlog.
+        total = db().execute(
+            "SELECT COALESCE(SUM(LENGTH(audio)),0) FROM utterances").fetchone()[0]
+        if total > KEEP_BYTES:
+            for uid, n in db().execute(
+                    "SELECT id,LENGTH(audio) FROM utterances WHERE dismissed=1 "
+                    "ORDER BY ts ASC"):
+                db().execute("DELETE FROM utterances WHERE id=?", (uid,))
+                total -= n
+                if total <= KEEP_BYTES:
+                    break
         db().commit()
 
 
@@ -347,9 +417,9 @@ def mark_played(ids):
 def history(limit=120):
     with _db_lock:
         rows = db().execute(
-            "SELECT id,ts,session,voice,text,dur,played FROM utterances "
+            "SELECT id,ts,session,voice,text,dur,played,dismissed FROM utterances "
             "ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
-    keys = ("id", "ts", "session", "voice", "text", "dur", "played")
+    keys = ("id", "ts", "session", "voice", "text", "dur", "played", "dismissed")
     return [dict(zip(keys, r)) for r in rows]
 
 
@@ -373,7 +443,8 @@ def pipeline_for(voice):
 
 def play_pcm(pcm):
     """Blocking playback of a complete buffer, interruptible via stop."""
-    global _current
+    global _current, _last_play_end
+    gap()
     proc = subprocess.Popen(
         ["pw-play", "--format=s16", f"--rate={SAMPLE_RATE}", "--channels=1", "-"],
         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -389,12 +460,13 @@ def play_pcm(pcm):
         with _current_lock:
             if _current is proc:
                 _current = None
+        _last_play_end = time.time()
 
 
 def speak(job):
     """Synthesize, streaming to the speakers as chunks land so playback starts
     on the first sentence, while accumulating full PCM for the archive."""
-    global _current
+    global _current, _last_play_end
     import numpy as np
 
     voice, text = job["voice"], job["text"]
@@ -412,6 +484,7 @@ def speak(job):
             if not live:
                 continue
             if proc is None:
+                gap()
                 proc = subprocess.Popen(
                     ["pw-play", "--format=s16", f"--rate={SAMPLE_RATE}",
                      "--channels=1", "-"],
@@ -432,6 +505,7 @@ def speak(job):
             with _current_lock:
                 if _current is proc:
                     _current = None
+            _last_play_end = time.time()
 
     if not parts:
         return
@@ -442,6 +516,8 @@ def speak(job):
         return
     if ephemeral:
         return
+    global _last_repeat
+    _last_repeat = time.time()   # a new message restarts the nag clock
     store({
         "id": f"{int(time.time()*1000)}-{os.urandom(3).hex()}",
         "ts": time.time(),
@@ -456,12 +532,50 @@ def speak(job):
 def drain_inbox():
     """Speak everything unplayed, oldest first, marking as it goes so an
     interruption doesn't replay what you already heard."""
+    global _last_repeat
     with _db_lock:
         rows = db().execute(
-            "SELECT id,audio FROM utterances WHERE played=0 ORDER BY ts ASC").fetchall()
+            "SELECT id,audio FROM utterances WHERE dismissed=0 "
+            "ORDER BY ts ASC").fetchall()
+    # Guard against a wall of speech: read the newest few, then say how many
+    # more are stacked up rather than working through twenty of them.
+    if len(rows) > REPEAT_MAX:
+        skipped = len(rows) - REPEAT_MAX
+        rows = rows[-REPEAT_MAX:]
+    else:
+        skipped = 0
     for uid, blob in rows:
         play_pcm(blob[44:])                    # strip the 44-byte WAV header
         mark_played([uid])
+    if skipped:
+        speak({"text": f"And {skipped} more waiting.", "voice": DEFAULT_VOICE,
+               "speed": 1.0, "session": "", "out": None, "ephemeral": True})
+    _last_repeat = time.time()
+
+
+def repeater():
+    """Re-speak the inbox on an interval so a message you missed does not sit
+    there silently. Paused while muted — mute means do not make noise, and a
+    reminder is still noise."""
+    while True:
+        time.sleep(15)
+        try:
+            p = prefs()
+            if not p["repeat_enabled"] or is_muted() or not pending_count():
+                continue
+            # Base the interval on the newest undismissed message as well as
+            # the last repeat, so a message is never nagged sooner than the
+            # interval after it arrived. Reading it from the table beats a
+            # global that only some code paths remember to update.
+            with _db_lock:
+                newest = db().execute(
+                    "SELECT MAX(ts) FROM utterances WHERE dismissed=0").fetchone()[0] or 0
+            if time.time() - max(_last_repeat, newest) < p["repeat_minutes"] * 60:
+                continue
+            log(f"repeating {pending_count()} undismissed")
+            submit({"kind": "drain"})
+        except Exception as exc:
+            log(f"repeater: {type(exc).__name__}: {exc}")
 
 
 def stop_current():
@@ -572,10 +686,18 @@ def handle(conn):
                     "out": None, "ephemeral": True}, wait=req.get("wait"))
             return reply({"ok": True})
 
+        if req.get("dismiss"):
+            n = dismiss(None if req["dismiss"] is True else [req["dismiss"]])
+            return reply({"ok": True, "dismissed": n})
+
+        if req.get("prefs") is not None:
+            p = set_prefs(req["prefs"]) if req["prefs"] else prefs()
+            return reply({"ok": True, **p})
+
         if req.get("status"):
             return reply({"ok": True, "muted": is_muted(),
                           "pending": pending_count(),
-                          "ui": f"http://127.0.0.1:{UI_PORT}"})
+                          "ui": f"http://127.0.0.1:{UI_PORT}", **prefs()})
 
         label, voice = resolve_session(req.get("session") or "", req.get("cwd"))
         submit({
@@ -590,141 +712,7 @@ def handle(conn):
 
 # ---------------------------------------------------------------- web UI
 
-PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
-<title>say</title><meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='14'>%F0%9F%94%8A</text></svg>">
-<style>
-:root{--bg:#faf9f7;--fg:#1a1a1a;--dim:#6b6b6b;--card:#fff;--line:#e5e3df;
-      --accent:#2563eb;--warn:#b45309;--warnbg:#fef3c7}
-@media(prefers-color-scheme:dark){:root:not([data-theme=light]){
-  --bg:#16161a;--fg:#e8e6e3;--dim:#8f8d89;--card:#1e1e24;--line:#2e2e36;
-  --accent:#7aa2f7;--warn:#fbbf24;--warnbg:#3a2f12}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);
- font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
-header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);
- padding:12px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;z-index:5}
-h1{font-size:16px;margin:0 6px 0 0;font-weight:600;letter-spacing:-.01em}
-.spacer{flex:1}
-button,select{font:inherit;font-size:13px;background:var(--card);color:var(--fg);
- border:1px solid var(--line);border-radius:7px;padding:5px 11px;cursor:pointer}
-button:hover{border-color:var(--accent)}
-button.on{background:var(--warnbg);border-color:var(--warn);color:var(--warn);font-weight:600}
-#banner{display:none;background:var(--warnbg);color:var(--warn);padding:8px 20px;
- font-size:13px;font-weight:500;border-bottom:1px solid var(--line)}
-#banner.show{display:block}
-main{padding:16px 20px 60px;max-width:900px;margin:0 auto}
-.row{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--sc);
- border-radius:9px;padding:11px 14px;margin-bottom:9px;position:relative}
-.row.unheard{box-shadow:inset 3px 0 0 0 var(--warn)}
-.meta{display:flex;gap:9px;align-items:center;font-size:12px;color:var(--dim);
- margin-bottom:5px;flex-wrap:wrap}
-.badge{background:var(--sc);color:#fff;padding:1px 8px;border-radius:20px;
- font-weight:600;font-size:11px}
-.new{background:var(--warn);color:#000;padding:1px 7px;border-radius:20px;
- font-size:10px;font-weight:700;letter-spacing:.04em}
-.text{white-space:pre-wrap;word-break:break-word}
-audio{height:30px;margin-top:8px;width:100%;max-width:420px;display:block}
-.empty{color:var(--dim);text-align:center;padding:60px 20px}
-#sessions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
-.sess{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--sc);
- border-radius:9px;padding:8px 11px;min-width:190px}
-.sess.dead{opacity:.45}
-.sess .top{display:flex;align-items:center;gap:7px;margin-bottom:3px}
-.dot{width:7px;height:7px;border-radius:50%;background:#22c55e;flex:none}
-.sess.dead .dot{background:var(--dim)}
-.sess .nm{font-weight:600;font-size:13px}
-.sess .cwd{font-size:11px;color:var(--dim);word-break:break-all;margin-bottom:6px}
-.sess .vc{font-size:11px;color:var(--dim)}
-.play{font-size:11px;padding:3px 9px;border-radius:6px}
-.vsel{font-size:11px;padding:2px 5px;max-width:132px}
-</style></head><body>
-<header>
-  <h1>say</h1>
-  <button id="mute">…</button>
-  <button id="drain">play inbox</button>
-  <button id="stop">stop</button>
-  <select id="filter"><option value="">all sessions</option></select>
-  <span class="spacer"></span>
-  <label style="font-size:12px;color:var(--dim)">
-    <input type="checkbox" id="auto" checked> live</label>
-</header>
-<div id="banner"></div>
-<main>
-  <section id="sessions"></section>
-  <div id="list" class="empty">nothing spoken yet</div>
-</main>
-<script>
-const VOICES=__VOICES__;
-const listEl=document.getElementById('list'),filtEl=document.getElementById('filter'),
-      muteEl=document.getElementById('mute'),banner=document.getElementById('banner');
-let sessions=new Set(),lastSig='';
-// Stable hue per session, so a badge colour means the same project every time.
-function hue(s){let h=0;for(const c of s)h=(h*31+c.charCodeAt(0))>>>0;return h%360}
-function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
-function when(ts){const d=new Date(ts*1000),n=new Date();
- const t=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
- return d.toDateString()===n.toDateString()?t
-   :d.toLocaleDateString([],{month:'short',day:'numeric'})+' '+t}
-async function drawSessions(){
-  const ss=await (await fetch('/api/sessions')).json();
-  document.getElementById('sessions').innerHTML=ss.map(s=>`
-    <div class="sess ${s.ended?'dead':''}" style="--sc:hsl(${hue(s.project)} 62% 48%)">
-      <div class="top"><span class="dot"></span><span class="nm">${esc(s.label)}</span></div>
-      <div class="cwd">${esc(s.cwd||'')}</div>
-      <div class="top">
-        <select class="vsel" onchange="pin('${esc(s.project)}',this.value)">
-          ${VOICES.map(v=>`<option value="${v[0]}" ${v[0]===s.voice?'selected':''}
-             >${v[0]} (${v[2]})</option>`).join('')}
-        </select>
-        <button class="play" onclick="preview(this.previousElementSibling.value,'${esc(s.project)}')">hear</button>
-      </div>
-    </div>`).join('');
-}
-// Choosing from the dropdown pins the project, so the choice survives restarts
-// and is never reshuffled by automatic allocation.
-async function pin(project,voice){
-  await fetch('/api/pin',{method:'POST',body:JSON.stringify({project:project,voice:voice})});
-  await preview(voice,project); lastSig='';
-}
-async function preview(voice,project){
-  await fetch('/api/preview',{method:'POST',
-    body:JSON.stringify({voice:voice,text:`This is the ${project} session speaking.`})});
-}
-async function refresh(){
-  drawSessions();
-  const st=await (await fetch('/api/status')).json();
-  muteEl.textContent=st.muted?'muted':'unmuted';
-  muteEl.className=st.muted?'on':'';
-  banner.className=st.pending?'show':'';
-  banner.textContent=st.pending?`${st.pending} message${st.pending>1?'s':''} waiting in the inbox`:'';
-  document.title=st.pending?`(${st.pending}) say`:'say';
-  const items=await (await fetch('/api/history')).json();
-  const sig=items.map(i=>i.id+i.played).join(',');
-  if(sig===lastSig)return; lastSig=sig;
-  for(const i of items) if(!sessions.has(i.session)){sessions.add(i.session);
-    const o=document.createElement('option');o.value=o.textContent=i.session;filtEl.appendChild(o)}
-  const want=filtEl.value, shown=items.filter(i=>!want||i.session===want);
-  if(!shown.length){listEl.className='empty';listEl.textContent='nothing spoken yet';return}
-  listEl.className='';
-  listEl.innerHTML=shown.map(i=>`
-   <div class="row ${i.played?'':'unheard'}" style="--sc:hsl(${hue(i.session)} 62% 48%)">
-     <div class="meta"><span class="badge">${esc(i.session)}</span>
-       <span>${when(i.ts)}</span><span>${i.voice}</span><span>${i.dur}s</span>
-       ${i.played?'':'<span class="new">UNHEARD</span>'}</div>
-     <div class="text">${esc(i.text)}</div>
-     <audio controls preload="none" src="/audio/${i.id}.wav"
-            onplay="fetch('/api/heard/${i.id}',{method:'POST'})"></audio>
-   </div>`).join('');
-}
-muteEl.onclick=async()=>{const m=muteEl.textContent==='muted';
-  await fetch('/api/mute',{method:'POST',body:JSON.stringify({mute:!m})});lastSig='';refresh()};
-document.getElementById('drain').onclick=()=>fetch('/api/drain',{method:'POST'});
-document.getElementById('stop').onclick=()=>fetch('/api/stop',{method:'POST'});
-filtEl.onchange=()=>{lastSig='';refresh()};
-setInterval(()=>{if(document.getElementById('auto').checked)refresh()},2000);
-refresh();
-</script></body></html>"""
+UI_HTML = os.path.join(os.path.dirname(os.path.realpath(__file__)), "ui.html")
 
 
 class UI(BaseHTTPRequestHandler):
@@ -743,14 +731,17 @@ class UI(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path in ("/", "/index.html"):
-            page = PAGE.replace("__VOICES__", json.dumps(
-                [[v, "", GRADES.get(v, "")] for v in VOICE_POOL]))
+            with open(UI_HTML) as fh:          # read per request, so editing
+                page = fh.read()               # ui.html needs no restart
+            page = page.replace("__VOICES__", json.dumps(
+                [[v, GRADES.get(v, "")] for v in VOICE_POOL]))
+            page = page.replace("__HOME__", json.dumps(os.path.expanduser("~")))
             return self._send(200, "text/html; charset=utf-8", page.encode())
         if self.path == "/api/history":
             return self._send(200, "application/json", json.dumps(history()).encode())
         if self.path == "/api/status":
             return self._send(200, "application/json", json.dumps(
-                {"muted": is_muted(), "pending": pending_count()}).encode())
+                {"muted": is_muted(), "pending": pending_count(), **prefs()}).encode())
         if self.path == "/api/sessions":
             return self._send(200, "application/json",
                               json.dumps(list_sessions()).encode())
@@ -788,6 +779,20 @@ class UI(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n) or b"{}")
             return self._send(200, "application/json", json.dumps(
                 pin_project(body["project"], body["voice"])).encode())
+        if self.path == "/api/dismiss-all":
+            return self._send(200, "application/json",
+                              json.dumps({"dismissed": dismiss()}).encode())
+        if self.path.startswith("/api/dismiss/"):
+            return self._send(200, "application/json", json.dumps(
+                {"dismissed": dismiss([os.path.basename(self.path[13:])])}).encode())
+        if self.path.startswith("/api/delete/"):
+            return self._send(200, "application/json", json.dumps(
+                {"deleted": delete(os.path.basename(self.path[12:]))}).encode())
+        if self.path == "/api/prefs":
+            n = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(n) or b"{}")
+            return self._send(200, "application/json",
+                              json.dumps(set_prefs(body)).encode())
         if self.path.startswith("/api/heard/"):
             mark_played([os.path.basename(self.path[len("/api/heard/"):])])
             return self._send(200, "application/json", b'{"ok":true}')
@@ -824,7 +829,12 @@ def main():
     srv.listen(16)
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=serve_ui, daemon=True).start()
-    log(f"ready on {SOCKET_PATH} (muted={is_muted()}, pending={pending_count()})")
+    global _last_repeat
+    _last_repeat = time.time()      # don't nag the instant the daemon restarts
+    threading.Thread(target=repeater, daemon=True).start()
+    p = prefs()
+    log(f"ready on {SOCKET_PATH} (muted={is_muted()}, inbox={pending_count()}, "
+        f"repeat={'every %dm' % p['repeat_minutes'] if p['repeat_enabled'] else 'off'})")
 
     try:
         while True:

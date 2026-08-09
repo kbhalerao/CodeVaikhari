@@ -47,6 +47,10 @@ say --inbox                          # speak everything that queued while muted
 say --status                         # muted? how many waiting?
 say --stop                           # shut it up mid-sentence
 
+say --dismiss                        # dismiss everything waiting
+say --repeat 20                      # re-speak undismissed every 20 min
+say --no-repeat
+
 say --sessions                       # who is registered, and with which voice
 say --pin bm_fable                   # pin this project to a voice
 say --unpin                          # back to automatic allocation
@@ -56,15 +60,31 @@ say --ui                             # open the review UI
 
 ## The UI
 
-`http://127.0.0.1:8765` — served by the daemon.
+`http://127.0.0.1:8765` — served by the daemon. Two panes:
 
-- Every utterance, newest first, with a **replay** player
-- Colour-coded per session, with the project directory and assigned voice
-- A voice dropdown per session — changing it **pins** the project and plays a
-  sample, so you can pick by ear
-- **hear** button to sample the currently selected voice
-- Mute toggle and "play inbox"
-- Unheard messages are flagged; the tab title carries a pending count
+**Left rail** — live sessions, each with a coloured pip, its working
+directory, and a voice dropdown. Changing the dropdown **pins** that project
+to the voice and immediately plays a sample, so you can choose by ear.
+Preferences sit at the bottom.
+
+**Right pane** — the inbox. Undismissed messages first, each with a replay
+player and a **Dismiss** button; dismissed ones fall below a divider. One big
+**Dismiss all**. `delete` removes a message from the database outright.
+
+The tab title carries the pending count, so a background tab still tells you
+how many are waiting.
+
+### Repeat
+
+Undismissed messages are re-spoken every N minutes (default **10**, toggle and
+interval in Preferences, or `say --repeat 20` / `say --no-repeat`). The clock
+runs from the newest undismissed message *or* the last repeat, whichever is
+later, so a message is never nagged sooner than the full interval after it
+arrives.
+
+Repeat is paused while muted — mute means make no noise, and a reminder is
+still noise. A single repeat reads out at most 5 messages and then says how
+many more are stacked up, rather than working through twenty of them.
 
 ## Sessions and voices
 
@@ -95,10 +115,37 @@ survives daemon restarts. `say --unpin` clears the pin; live sessions keep the
 voice they are already using for the rest of their life, since reshuffling
 mid-session would change the thing you just learned to recognise.
 
+## Playback
+
+Playback is strictly serial: one worker thread drains the queue and each job
+blocks until `pw-play` exits, so two messages can never overlap. A **3 second
+gap** separates consecutive utterances (`KOKORO_GAP`). It is enforced as a
+minimum interval since the last playback ended rather than a blanket sleep, so
+an idle system still speaks immediately and only back-to-back messages get
+spaced.
+
+`say --stop` kills whatever is speaking and drops the queue.
+
+## Message size
+
+There is no practical text limit. Measured on this box: a 3,105-character
+passage (~480 words) synthesized in 3.4s and played for 198s, and a
+pathological 400-word sentence with no punctuation came through intact —
+misaki chunks on a token budget, not just on punctuation, so run-on text does
+not get truncated.
+
+The real cost is archive size: audio is stored as a BLOB at 48 KB/s, so that
+198s message is ~9.5 MB. The archive is therefore bounded two ways — the last
+250 dismissed messages, and a 200 MB byte budget, oldest dismissed dropped
+first. The inbox is exempt from both; an undismissed message is not backlog.
+
+Note that serial playback means one very long message holds the queue for its
+full duration. `say --stop` skips it.
+
 Storage is SQLite at `~/.local/state/kokoro-say/say.db`: `utterances` (with
 the audio as a BLOB, so replay never re-synthesizes), `sessions`, `voices`,
-`settings`. Heard history is pruned to the last 250; **the inbox is never
-pruned**.
+`settings`. `dismissed` and `played` are separate axes: a message you heard
+but did not act on still sits in the inbox.
 
 ## Claude Code wiring
 
@@ -126,6 +173,7 @@ Environment variables, read by both client and daemon:
 | `KOKORO_VOICE` | default voice (`af_heart`) |
 | `KOKORO_DEVICE` | `cuda` or `cpu` |
 | `KOKORO_UI_PORT` | UI port (8765) |
+| `KOKORO_GAP` | silence between utterances, seconds (3.0) |
 | `KOKORO_SOCKET` | socket path |
 | `KOKORO_VENV` | venv location |
 
