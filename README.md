@@ -188,6 +188,10 @@ SQLite at `~/.local/state/vaikhari/vaikhari.db`.
 `dismissed` and `played` are separate axes: a message you heard but did not
 act on still sits in the inbox.
 
+An hourly pass deletes dismissed rows older than `VAIKHARI_KEEP_DAYS` (30),
+drops sessions that ended long ago with nothing left to show, and VACUUMs
+when it removed anything. The inbox is never touched, at any age.
+
 ## Claude Code wiring
 
 `install.sh` does not touch your Claude Code config. Add these to
@@ -211,6 +215,7 @@ act on still sits in the inbox.
 | Hook | Effect |
 |---|---|
 | `SessionStart` | register the session, take the project's voice |
+| `UserPromptSubmit` | clear that session's spoken messages |
 | `SessionEnd` | release it |
 | `Notification` | speak what needs attention |
 | `Stop` | speak the conclusion of what just happened |
@@ -248,6 +253,22 @@ and a message you cannot place is not much better than no message.
 The daemon adds it, not the hooks, so it applies to everything. Text that
 already starts with the project name is left alone.
 
+### Clearing itself up
+
+Going back to a session and typing in it means you have dealt with whatever it
+was telling you, so the `UserPromptSubmit` hook clears that session's inbox.
+Between that and the hook suppression above, the inbox mostly empties itself
+and you only dismiss things you never went back to.
+
+Only messages that were actually **spoken** are cleared this way. One that
+queued while muted was never heard, so returning to the session is no reason
+to drop it silently — those stay until you deal with them.
+
+`say --dismiss-session` does the same by hand. It is deliberately a separate
+flag from `--dismiss`: the session now defaults from `CLAUDE_CODE_SESSION_ID`,
+so overloading `--dismiss` would silently narrow it whenever it ran inside a
+session.
+
 ### Not saying it twice
 
 Hook messages are sent with `--auto`, which means *skippable*. If the session
@@ -279,6 +300,7 @@ Read by both client and daemon:
 | `VAIKHARI_GAP` | silence between utterances, seconds (3.0) |
 | `VAIKHARI_AUTO_WINDOW` | suppress a hook message this long after a manual one (120s) |
 | `VAIKHARI_AUTO_DEDUP` | suppress an identical hook message within this long (600s) |
+| `VAIKHARI_KEEP_DAYS` | delete dismissed messages after this many days (30) |
 | `VAIKHARI_SOCKET` | socket path |
 | `VAIKHARI_VENV` | venv location |
 

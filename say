@@ -11,6 +11,7 @@
   say --mute / --unmute           global mute; muted messages queue in the inbox
   say --inbox                     speak the inbox now
   say --dismiss                   dismiss everything waiting
+  say --dismiss-session           dismiss this session's played messages
   say --repeat 10 / --no-repeat   re-speak undismissed messages every N minutes
   say --status                    muted? how many waiting? UI url
   say --stop                      shut it up
@@ -143,7 +144,7 @@ def main(argv):
         elif a in ("--stop", "--mute", "--unmute", "--inbox", "--status",
                    "--ui", "--voices", "--sessions", "--register",
                    "--unregister", "--preview", "--pin", "--unpin", "--pins",
-                   "--dismiss", "--repeat", "--no-repeat"):
+                   "--dismiss", "--repeat", "--no-repeat", "--dismiss-session"):
             action = a
         elif a in ("-h", "--help"):
             print(__doc__); return 0
@@ -165,6 +166,14 @@ def main(argv):
                else "repeat off")
         print(f"{'muted' if r['muted'] else 'unmuted'}, "
               f"{r['pending']} waiting, {rep}  |  {r['ui']}")
+        return 0
+    if action == "--dismiss-session":
+        # Deliberately a separate flag from --dismiss: `session` now defaults
+        # from CLAUDE_CODE_SESSION_ID, so overloading --dismiss would silently
+        # narrow it whenever it ran inside a session.
+        r = send({"dismiss_session": session or os.getcwd(),
+                  "cwd": cwd or os.getcwd()})
+        print(f"dismissed {r['dismissed']} for {r['session']}")
         return 0
     if action == "--dismiss":
         print(f"dismissed {send({'dismiss': True})['dismissed']}")

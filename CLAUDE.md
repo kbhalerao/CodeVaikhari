@@ -70,6 +70,10 @@ Break these and the thing stops being useful:
 9. **The daemon prefixes the project name onto everything it speaks.** Do
    not also prefix in the hooks or callers — it gets said twice.
 
+10. **Auto-dismissal only touches `played=1`.** A message queued while muted
+    was never heard; clearing it because you revisited the session would lose
+    it silently.
+
 ## Gotchas
 
 - **`pkill -f vaikharid` matches its own shell** when the pattern appears in

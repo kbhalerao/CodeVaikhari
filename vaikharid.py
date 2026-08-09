@@ -56,6 +56,9 @@ KEEP_PLAYED = 250          # dismissed utterances that keep their audio
 # ~198s of audio), but audio is archived as a BLOB at 48 KB/s, so a few long
 # messages can outweigh hundreds of short ones. Bound the archive by bytes too.
 KEEP_BYTES = 200 * 1024 * 1024
+# Dismissed rows are deleted outright after this long. Text is cheap but not
+# free, and a log nobody will ever read is just a bigger file to VACUUM.
+KEEP_DAYS = float(os.environ.get("VAIKHARI_KEEP_DAYS", "30"))
 GAP = float(os.environ.get("VAIKHARI_GAP", "3.0"))   # silence between utterances
 # A hook-generated message is suppressed if the same session said something
 # deliberate this recently. Claude summarising its own work and then a hook
@@ -269,6 +272,19 @@ def dismiss(ids=None):
             n = db().executemany(
                 "UPDATE utterances SET dismissed=1 WHERE id=? AND dismissed=0",
                 [(i,) for i in ids]).rowcount
+        db().commit()
+    return n
+
+
+def dismiss_session(label):
+    """Clear a session's inbox because you went back to that session.
+
+    Only messages that were actually spoken: one queued while muted was never
+    heard, so returning to the session is no reason to drop it silently."""
+    with _db_lock:
+        n = db().execute(
+            "UPDATE utterances SET dismissed=1 "
+            "WHERE session=? AND dismissed=0 AND played=1", (label,)).rowcount
         db().commit()
     return n
 
@@ -577,6 +593,32 @@ def queue_drain():
     submit({"kind": "drain"})
 
 
+def maintenance():
+    """Hourly tidy: drop dismissed rows past the retention window and reclaim
+    the pages that expiring audio blobs left behind. The inbox is untouched."""
+    while True:
+        time.sleep(3600)
+        try:
+            cutoff = time.time() - KEEP_DAYS * 86400
+            with _db_lock:
+                n = db().execute(
+                    "DELETE FROM utterances WHERE dismissed=1 AND ts < ?",
+                    (cutoff,)).rowcount
+                # Sessions that ended long ago and have nothing left to show.
+                db().execute(
+                    "DELETE FROM sessions WHERE ended IS NOT NULL AND ended < ? "
+                    "AND sid NOT IN (SELECT DISTINCT session FROM utterances)",
+                    (cutoff,))
+                db().commit()
+                if n:
+                    db().execute("VACUUM")
+            if n:
+                log(f"maintenance: dropped {n} dismissed older than "
+                    f"{KEEP_DAYS:g}d, vacuumed")
+        except Exception as exc:
+            log(f"maintenance: {type(exc).__name__}: {exc}")
+
+
 def repeater():
     """Drain the inbox every N minutes, timed from the end of the last drain.
 
@@ -719,6 +761,13 @@ def handle(conn):
                     "session": "", "voice": voice, "speed": 1.0,
                     "out": None, "ephemeral": True}, wait=req.get("wait"))
             return reply({"ok": True})
+
+        if req.get("dismiss_session"):
+            label, _ = resolve_session(req["dismiss_session"], req.get("cwd"))
+            n = dismiss_session(label)
+            if n:
+                log(f"{label} revisited; dismissed {n}")
+            return reply({"ok": True, "dismissed": n, "session": label})
 
         if req.get("dismiss"):
             n = dismiss(None if req["dismiss"] is True else [req["dismiss"]])
@@ -1052,6 +1101,7 @@ def main():
     global _last_drain_end
     _last_drain_end = time.time()   # don't nag the instant the daemon restarts
     threading.Thread(target=repeater, daemon=True).start()
+    threading.Thread(target=maintenance, daemon=True).start()
     p = prefs()
     log(f"ready on {SOCKET_PATH} (muted={is_muted()}, inbox={pending_count()}, "
         f"repeat={'every %dm' % p['repeat_minutes'] if p['repeat_enabled'] else 'off'})")
