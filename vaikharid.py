@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Warm Kokoro TTS daemon, inbox, and local review UI.
+"""CodeVaikhari: warm Kokoro TTS daemon, inbox, and local review UI.
 
 Keeps the model resident so `say` costs ~130ms instead of the ~10.7s a cold
 torch + model load takes per invocation. Every utterance is synthesized,
@@ -29,22 +29,22 @@ from io import BytesIO
 
 warnings.filterwarnings("ignore")
 
-SOCKET_PATH = os.environ.get("KOKORO_SOCKET") or os.path.join(
-    os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "kokoro-say.sock"
+SOCKET_PATH = os.environ.get("VAIKHARI_SOCKET") or os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "vaikhari.sock"
 )
-STATE = os.path.expanduser("~/.local/state/kokoro-say")
-DB_PATH = os.path.join(STATE, "say.db")
-UI_PORT = int(os.environ.get("KOKORO_UI_PORT", "8765"))
+STATE = os.path.expanduser("~/.local/state/vaikhari")
+DB_PATH = os.path.join(STATE, "vaikhari.db")
+UI_PORT = int(os.environ.get("VAIKHARI_UI_PORT", "8765"))
 SAMPLE_RATE = 24000
-DEFAULT_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
-DEVICE = os.environ.get("KOKORO_DEVICE", "cuda")
+DEFAULT_VOICE = os.environ.get("VAIKHARI_VOICE", "af_heart")
+DEVICE = os.environ.get("VAIKHARI_DEVICE", "cuda")
 KEEP_PLAYED = 250          # dismissed utterances retained; the inbox is never pruned
 # Text length is effectively unbounded (a 3,000-char passage synthesizes fine,
 # ~198s of audio), but audio is archived as a BLOB at 48 KB/s, so a few long
 # messages can outweigh hundreds of short ones. Bound the archive by bytes too.
 KEEP_BYTES = 200 * 1024 * 1024
 REPEAT_MAX = 5             # most a single repeat will read out before summarising
-GAP = float(os.environ.get("KOKORO_GAP", "3.0"))   # silence between utterances
+GAP = float(os.environ.get("VAIKHARI_GAP", "3.0"))   # silence between utterances
 
 # All 28 English voices, ordered by two criteria at once: the model card's
 # quality grade (best first, so a handful of sessions all get good voices) and
@@ -95,7 +95,7 @@ _pipelines = {}
 _jobs = queue.Queue()
 _current = None
 _current_lock = threading.Lock()
-_db_lock = threading.Lock()
+_db_lock = threading.RLock()
 _db = None
 _last_repeat = 0.0
 _last_play_end = 0.0
@@ -253,54 +253,44 @@ def set_prefs(d):
     return prefs()
 
 
-def register_session(sid, cwd, label=None):
-    """Claim a voice for a live session.
+def voice_for_project(project):
+    """A project's voice is sticky: assigned once, then read back from the
+    voices table forever. New projects take the next voice no other project
+    already owns, so every project sounds different without anyone choosing.
 
-    Uniqueness only has to hold among sessions that are currently running —
-    that is what you actually need to tell two speakers apart. So a voice is
-    released on session end and can be reused. A project keeps its previous
-    voice when that voice is free, which keeps things recognisable across
-    restarts without permanently burning a slot per project ever seen."""
+    Uniqueness is against every project ever seen, not just live ones. That
+    costs a pool slot per project but means a voice always means the same
+    repo — which is the whole point of hearing which session spoke."""
+    with _db_lock:
+        row = db().execute(
+            "SELECT voice FROM voices WHERE session=?", (project,)).fetchone()
+        if row:
+            return row[0]
+        taken = {r[0] for r in db().execute("SELECT voice FROM voices")}
+        pick = next((v for v in VOICE_POOL if v not in taken),
+                    VOICE_POOL[len(taken) % len(VOICE_POOL)])
+        db().execute("INSERT INTO voices(session,voice) VALUES(?,?)", (project, pick))
+        db().commit()
+    return pick
+
+
+def register_session(sid, cwd, label=None):
+    """Record a live session and give it its project's voice.
+
+    The voice is a cached preference, not a fresh allocation: see
+    voice_for_project. Two sessions in the same repo therefore sound the same
+    — they are the same project, and the label distinguishes them in the UI.
+    Across repos, a voice always means one repo."""
     project = os.path.basename((cwd or "").rstrip("/")) or "claude"
     label = label or f"{project}.{sid[:4]}" if sid else project
-
-    # An explicit pin is the user's stated preference and outranks everything,
-    # including collision avoidance: if you pin two projects to one voice,
-    # that is your call to make.
-    pin = pinned_voice(project)
-
+    # An explicit pin is your stated preference and outranks the cache.
+    pick = pinned_voice(project) or voice_for_project(project)
     with _db_lock:
-        row = db().execute("SELECT voice FROM sessions WHERE sid=? AND ended IS NULL",
-                           (sid,)).fetchone()
-        if row and not pin:
-            return {"voice": row[0], "label": label, "project": project}
-        if pin:
-            db().execute(
-                "INSERT INTO sessions(sid,label,project,cwd,voice,started,ended) "
-                "VALUES(?,?,?,?,?,?,NULL) ON CONFLICT(sid) DO UPDATE SET "
-                "label=excluded.label, cwd=excluded.cwd, voice=excluded.voice, "
-                "ended=NULL", (sid, label, project, cwd or "", pin, time.time()))
-            db().commit()
-            return {"voice": pin, "label": label, "project": project, "pinned": True}
-
-        taken = {r[0] for r in db().execute(
-            "SELECT voice FROM sessions WHERE ended IS NULL")}
-        prev = db().execute(
-            "SELECT voice FROM voices WHERE session=?", (project,)).fetchone()
-        pick = prev[0] if prev and prev[0] not in taken else None
-        if pick is None:
-            pick = next((v for v in VOICE_POOL if v not in taken), None)
-        if pick is None:                       # >11 live sessions; wrap round
-            pick = VOICE_POOL[len(taken) % len(VOICE_POOL)]
-
         db().execute(
             "INSERT INTO sessions(sid,label,project,cwd,voice,started,ended) "
             "VALUES(?,?,?,?,?,?,NULL) ON CONFLICT(sid) DO UPDATE SET "
             "label=excluded.label, cwd=excluded.cwd, voice=excluded.voice, ended=NULL",
             (sid, label, project, cwd or "", pick, time.time()))
-        db().execute(
-            "INSERT INTO voices(session,voice) VALUES(?,?) "
-            "ON CONFLICT(session) DO UPDATE SET voice=excluded.voice", (project, pick))
         db().commit()
     log(f"session {label} ({project}) -> {pick}")
     return {"voice": pick, "label": label, "project": project}
@@ -351,23 +341,7 @@ def resolve_session(key, cwd=None):
         return info["label"], info["voice"]
 
     project = key.split(".")[0]
-    with _db_lock:
-        row = db().execute(
-            "SELECT voice FROM voices WHERE session=?", (project,)).fetchone()
-        # Never hand out a voice a live session is already using, even on the
-        # ad-hoc path — two speakers sounding identical defeats the point.
-        live = {r[0] for r in db().execute(
-            "SELECT voice FROM sessions WHERE ended IS NULL")}
-        if row and row[0] not in live:
-            return key, row[0]
-        taken = live | {r[0] for r in db().execute("SELECT voice FROM voices")}
-        pick = next((v for v in VOICE_POOL if v not in taken),
-                    next((v for v in VOICE_POOL if v not in live), VOICE_POOL[0]))
-        db().execute("INSERT INTO voices(session,voice) VALUES(?,?) "
-                     "ON CONFLICT(session) DO UPDATE SET voice=excluded.voice",
-                     (project, pick))
-        db().commit()
-    return key, pick
+    return key, voice_for_project(project)
 
 
 def wav_bytes(pcm):
@@ -387,7 +361,7 @@ def store(entry, pcm):
             "VALUES(?,?,?,?,?,?,?,?)",
             (entry["id"], entry["ts"], entry["session"], entry["voice"],
              entry["text"], entry["dur"], entry["played"], wav_bytes(pcm)))
-        # Prune heard history only. Anything still unplayed is inbox, not backlog.
+        # Prune dismissed history only; the inbox is not backlog.
         db().execute(
             "DELETE FROM utterances WHERE dismissed=1 AND id NOT IN "
             "(SELECT id FROM utterances WHERE dismissed=1 ORDER BY ts DESC LIMIT ?)",
@@ -829,6 +803,18 @@ def main():
     srv.listen(16)
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=serve_ui, daemon=True).start()
+    # Sweep zombies: a session whose SessionEnd hook never fired (crash, kill
+    # -9) would otherwise hold its voice forever and eventually exhaust the
+    # pool. It keeps its voice if it speaks again — resolve_session looks up
+    # by sid regardless of ended — only the live slot is released.
+    with _db_lock:
+        n = db().execute(
+            "UPDATE sessions SET ended=? WHERE ended IS NULL AND started < ?",
+            (time.time(), time.time() - 24 * 3600)).rowcount
+        db().commit()
+    if n:
+        log(f"released {n} stale session(s) older than 24h")
+
     global _last_repeat
     _last_repeat = time.time()      # don't nag the instant the daemon restarts
     threading.Thread(target=repeater, daemon=True).start()

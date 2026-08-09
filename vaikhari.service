@@ -1,0 +1,13 @@
+[Unit]
+Description=CodeVaikhari speech daemon (say)
+After=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=@VENV@/bin/python @HERE@/vaikharid.py
+Restart=on-failure
+RestartSec=5
+Environment=VAIKHARI_DEVICE=cuda
+
+[Install]
+WantedBy=default.target

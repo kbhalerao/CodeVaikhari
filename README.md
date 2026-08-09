@@ -1,8 +1,13 @@
-# kokoro-say
+# CodeVaikhari
 
 Local neural text-to-speech for this machine, plus an inbox and review UI.
 Replaces `spd-say` for Claude Code notifications and anything else that wants
 to talk.
+
+*Vaikharī* is the fourth and final stage of speech in Sanskrit grammar: the
+articulated, audible one, as against the mental (*madhyamā*) and visionary
+(*paśyantī*) levels. This is the last hop from text to something you can hear.
+Sibling to [CodeAkriti](../CodeAkriti) and code-smriti.
 
 Runs [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) on
 the local GPU. Nothing leaves the machine.
@@ -88,18 +93,26 @@ many more are stacked up, rather than working through twenty of them.
 
 ## Sessions and voices
 
-Each Claude Code session registers on start (`SessionStart` hook) and claims a
-voice. Uniqueness is enforced **among live sessions only** — that is what you
-need to tell two speakers apart — so a voice returns to the pool on session
-end rather than being burned forever. A project reclaims its previous voice
-when that voice is free, so a repo tends to sound the same day to day.
+Each Claude Code session registers on start (`SessionStart` hook) and takes
+its project's voice.
 
-Two sessions in the same repo get different voices. A session that speaks
-without having registered self-registers from its `cwd`.
+**A voice is a cached preference, keyed by project, and it is sticky.** The
+first session in a repo takes the next voice no other project owns; every
+session after that reads the same voice back from the `voices` table. So a
+voice always means one repo, which is the point of hearing which session
+spoke. Two sessions in the same repo therefore sound alike — they are the same
+project, and the label (`farmworth.a3f1`) tells them apart in the UI.
+
+A session that speaks without having registered self-registers from its
+`cwd`, so sessions predating the hooks still get the right voice.
+
+On startup the daemon releases sessions older than 24h whose `SessionEnd`
+never fired, so a crashed session does not hold a slot forever.
 
 The pool is all **28 English voices**, ordered by the model card's quality
-grade (best first) and alternating accent/gender, so the first few sessions
-get both the best-sounding and the most distinguishable voices. Kokoro ships
+grade (best first) and alternating accent/gender, so the first few projects
+get both the best-sounding and the most distinguishable voices. Past 28
+projects it wraps and voices start repeating. Kokoro ships
 54 voices in total; the other 26 are Japanese, Chinese, Spanish, French,
 Hindi, Italian and Portuguese, and are not in the rotation.
 
@@ -119,7 +132,7 @@ mid-session would change the thing you just learned to recognise.
 
 Playback is strictly serial: one worker thread drains the queue and each job
 blocks until `pw-play` exits, so two messages can never overlap. A **3 second
-gap** separates consecutive utterances (`KOKORO_GAP`). It is enforced as a
+gap** separates consecutive utterances (`VAIKHARI_GAP`). It is enforced as a
 minimum interval since the last playback ended rather than a blanket sleep, so
 an idle system still speaks immediately and only back-to-back messages get
 spaced.
@@ -142,7 +155,7 @@ first. The inbox is exempt from both; an undismissed message is not backlog.
 Note that serial playback means one very long message holds the queue for its
 full duration. `say --stop` skips it.
 
-Storage is SQLite at `~/.local/state/kokoro-say/say.db`: `utterances` (with
+Storage is SQLite at `~/.local/state/vaikhari/say.db`: `utterances` (with
 the audio as a BLOB, so replay never re-synthesizes), `sessions`, `voices`,
 `settings`. `dismissed` and `played` are separate axes: a message you heard
 but did not act on still sits in the inbox.
@@ -170,12 +183,12 @@ Environment variables, read by both client and daemon:
 
 | | |
 |---|---|
-| `KOKORO_VOICE` | default voice (`af_heart`) |
-| `KOKORO_DEVICE` | `cuda` or `cpu` |
-| `KOKORO_UI_PORT` | UI port (8765) |
-| `KOKORO_GAP` | silence between utterances, seconds (3.0) |
-| `KOKORO_SOCKET` | socket path |
-| `KOKORO_VENV` | venv location |
+| `VAIKHARI_VOICE` | default voice (`af_heart`) |
+| `VAIKHARI_DEVICE` | `cuda` or `cpu` |
+| `VAIKHARI_UI_PORT` | UI port (8765) |
+| `VAIKHARI_GAP` | silence between utterances, seconds (3.0) |
+| `VAIKHARI_SOCKET` | socket path |
+| `VAIKHARI_VENV` | venv location |
 
 ## Notes
 

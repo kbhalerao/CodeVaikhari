@@ -198,7 +198,7 @@ function drawSessions(ss) {
       <div class="hd"><span class="pip"></span><span class="nm">${esc(s.label)}</span></div>
       <div class="path" title="${esc(s.cwd || '')}">${esc(shortPath(s.cwd))}</div>
       <div class="vr">
-        <select onchange="pin('${esc(s.project)}', this.value)">
+        <select autocomplete="off" onchange="pin('${esc(s.project)}', this.value, '${s.voice}')">
           ${VOICES.map(v => `<option value="${v[0]}"${v[0] === s.voice ? ' selected' : ''}>${v[0]} · ${v[1]}</option>`).join('')}
         </select>
         <button class="hear" onclick="preview(this.previousElementSibling.value, '${esc(s.project)}')">hear</button>
@@ -272,7 +272,11 @@ async function refresh() {
 
 async function dismiss(id) { await post('/api/dismiss/' + id); sig = ''; refresh(); }
 async function del(id)     { await post('/api/delete/' + id);  sig = ''; refresh(); }
-async function pin(project, voice) {
+async function pin(project, voice, current) {
+  // Browsers restore <select> values across a reload and fire change while
+  // doing it, which silently pinned whatever happened to be on screen. Only
+  // act on a real change of value.
+  if (voice === current) return;
   await post('/api/pin', {project, voice});
   await preview(voice, project);
   sig = ''; refresh();

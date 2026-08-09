@@ -4,7 +4,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV="${KOKORO_VENV:-$HOME/.local/share/kokoro-say-venv}"
+VENV="${VAIKHARI_VENV:-$HOME/.local/share/vaikhari-venv}"
 BIN="$HOME/.local/bin"
 
 echo "==> venv at $VENV"
@@ -28,15 +28,15 @@ ln -sf "$HERE/say" "$BIN/say"
 if [ "${1:-}" = "--systemd" ]; then
   echo "==> installing user service"
   mkdir -p "$HOME/.config/systemd/user"
-  sed "s|@HERE@|$HERE|g; s|@VENV@|$VENV|g" "$HERE/kokoro-say.service" \
-    > "$HOME/.config/systemd/user/kokoro-say.service"
+  sed "s|@HERE@|$HERE|g; s|@VENV@|$VENV|g" "$HERE/vaikhari.service" \
+    > "$HOME/.config/systemd/user/vaikhari.service"
   systemctl --user daemon-reload
-  systemctl --user enable --now kokoro-say.service
-  echo "    systemctl --user status kokoro-say"
+  systemctl --user enable --now vaikhari.service
+  echo "    systemctl --user status vaikhari"
 else
   echo "==> skipping systemd (pass --systemd to keep it warm from login)"
   echo "    without it, the first \`say\` of each boot pays a ~10s model load"
 fi
 
 echo
-echo "done. try:  say 'hello from kokoro'   then   say --ui"
+echo "done. try:  say 'vaikhari is speaking'   then   say --ui"

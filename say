@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Speak text with Kokoro. Drop-in upgrade for `spd-say`.
+"""CodeVaikhari client. Speak text aloud; drop-in upgrade for `spd-say`.
 
   say "build finished"            fire and forget
   echo hi | say                   read stdin
@@ -30,12 +30,12 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.realpath(__file__))
-VENV = os.environ.get("KOKORO_VENV", os.path.expanduser("~/.local/share/kokoro-say-venv"))
-DAEMON = os.path.join(HERE, "kokoro_sayd.py")
-SOCKET_PATH = os.environ.get("KOKORO_SOCKET") or os.path.join(
-    os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "kokoro-say.sock")
-STATE = os.path.expanduser("~/.local/state/kokoro-say")
-UI_URL = "http://127.0.0.1:%s" % os.environ.get("KOKORO_UI_PORT", "8765")
+VENV = os.environ.get("VAIKHARI_VENV", os.path.expanduser("~/.local/share/vaikhari-venv"))
+DAEMON = os.path.join(HERE, "vaikharid.py")
+SOCKET_PATH = os.environ.get("VAIKHARI_SOCKET") or os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "vaikhari.sock")
+STATE = os.path.expanduser("~/.local/state/vaikhari")
+UI_URL = "http://127.0.0.1:%s" % os.environ.get("VAIKHARI_UI_PORT", "8765")
 
 # name, accent/gender, model-card quality grade. Allocation walks this order,
 # so the best-graded voices get used first.
@@ -84,7 +84,7 @@ def ensure_daemon():
     except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError):
         pass
     os.makedirs(STATE, exist_ok=True)
-    sys.stderr.write("say: starting kokoro daemon (one-time ~10s)...\n")
+    sys.stderr.write("say: starting vaikhari daemon (one-time ~10s)...\n")
     with open(os.path.join(STATE, "daemon.log"), "ab") as logf:
         subprocess.Popen([os.path.join(VENV, "bin", "python"), DAEMON],
                          stdout=logf, stderr=subprocess.STDOUT,
@@ -110,8 +110,8 @@ def send(req):
 
 
 def main(argv):
-    voice = os.environ.get("KOKORO_VOICE")
-    session = os.environ.get("KOKORO_SESSION", "")
+    voice = os.environ.get("VAIKHARI_VOICE")
+    session = os.environ.get("VAIKHARI_SESSION", "")
     speed, wait, out, words, action, cwd = 1.0, False, None, [], None, None
     i = 0
     # Parse everything before acting, so flag order never matters
