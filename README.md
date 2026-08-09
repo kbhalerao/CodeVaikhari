@@ -246,7 +246,9 @@ Preambles are not conclusions. "Let me check whether that stuck" is text, but
 a tool call follows it, so it is not what you want read out. Transcripts store
 one content block per row, so the hook walks back over assistant rows and
 stops at the first `tool_use` it meets — if the turn was still working there
-is no conclusion yet, and it falls back to "*project* finished".
+is no conclusion yet, and the hook stays silent. A turn with nothing to
+conclude has almost always spoken already; announcing "*project* finished"
+after it is noise.
 
 Identical hook messages inside 10 minutes (`VAIKHARI_AUTO_DEDUP`) are dropped
 too. Claude Code re-emits "is waiting for your input" while it sits idle, and

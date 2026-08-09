@@ -32,7 +32,7 @@ Preambles are excluded structurally: transcripts hold one content block per
 row, so text and `tool_use` are never in the same row. What marks text as a
 preamble is a `tool_use` row appearing *after* it. The hook stops at the first
 one it meets walking back; if the turn was still working there is no
-conclusion yet and it falls back to "*project* finished".
+conclusion yet, and the hook says nothing at all.
 
 ## Voices
 

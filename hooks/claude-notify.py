@@ -8,7 +8,8 @@ transcript_path).
 On Stop, this speaks the *conclusion* rather than "project finished". Claude's
 closing message almost always leads with the result, and the transcript is
 already handed to the hook, so the useful sentence is right there — inventing
-a generic string instead was throwing it away.
+a generic string instead was throwing it away. When there is no conclusion to
+read, it stays silent: the turn either already spoke or has nothing to say.
 
 Kept stdlib-only and fire-and-forget so it never delays the session.
 """
@@ -103,8 +104,9 @@ def main():
     if ev.get("hook_event_name") == "Stop":
         # The daemon prefixes the project name onto everything it speaks, so
         # do not add it here or it gets said twice.
-        summary = speakable(last_assistant_text(ev.get("transcript_path")))
-        text = summary or "finished"
+        text = speakable(last_assistant_text(ev.get("transcript_path")))
+        if not text:
+            return 0        # no conclusion to read: "project finished" is noise
     else:
         # Notification messages are things like "Claude needs your permission
         # to use Bash" — strip the redundant prefix, we know who is talking.
