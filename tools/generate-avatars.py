@@ -32,7 +32,7 @@ import urllib.request
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "avatars"
 MODEL = "@cf/black-forest-labs/flux-1-schnell"
-SIZE = 128                     # displayed at 30-40px; 128 covers 3x screens
+SIZE = 256                     # displayed at 40-80px; 256 covers 3x screens
 
 STYLE = ("flat vector avatar illustration, head and shoulders portrait, "
          "centered, simple bold geometric shapes, clean flat colour fills, "
@@ -148,7 +148,7 @@ def main():
         png = OUT / f"{voice}.png"
         png.write_bytes(generate(voice, token, account))
         # Square-crop to the centre, downscale, and convert. cwebp at q80 puts
-        # a 128px avatar under 2 KB, so all 28 cost ~53 KB in the repo.
+        # a 256px avatar around 5 KB, so all 28 cost ~140 KB in the repo.
         subprocess.run(["convert", str(png), "-gravity", "center",
                         "-crop", "1:1", "+repage",
                         "-resize", f"{SIZE}x{SIZE}", str(png)], check=True)
