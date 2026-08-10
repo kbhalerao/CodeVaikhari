@@ -69,8 +69,6 @@ say --mute                      # global mute; messages queue instead of vanishi
 say --unmute
 say --inbox                     # speak what is waiting
 say --dismiss                   # dismiss everything waiting
-say --repeat 20                 # re-speak undismissed every 20 min
-say --no-repeat
 say --stop                      # shut it up mid-sentence
 say --status                    # muted? how many waiting?
 
@@ -139,16 +137,6 @@ Any voice without a file falls back to a generated SVG monogram — hue hashed
 from the name, initial of its given name, an inner ring for British voices —
 so deleting `avatars/` degrades cleanly rather than breaking the UI.
 
-## Repeat
-
-Undismissed messages are re-spoken every N minutes (default 10). The clock
-runs from the newest undismissed message *or* the last repeat, whichever is
-later, so nothing is nagged sooner than the full interval after it arrives.
-
-Repeat pauses while muted: mute means make no noise, and a reminder is still
-noise. One repeat reads at most 5 messages, then says how many more are
-stacked up, rather than working through twenty.
-
 ## Playback
 
 Strictly serial. One worker thread drains the queue and each job blocks until
@@ -188,7 +176,7 @@ SQLite at `~/.local/state/vaikhari/vaikhari.db`.
 | `utterances` | text, metadata, and the audio as a BLOB |
 | `sessions` | session id, label, project, cwd, voice, start/end |
 | `voices` | the sticky project → voice cache, and pins |
-| `settings` | mute, repeat interval |
+| `settings` | mute, UI token |
 
 `dismissed` and `played` are separate axes: a message you heard but did not
 act on still sits in the inbox.

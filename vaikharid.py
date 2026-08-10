@@ -119,8 +119,6 @@ _current = None
 _current_lock = threading.Lock()
 _db_lock = threading.RLock()
 _db = None
-_last_drain_end = 0.0
-_drain_pending = 0
 _last_play_end = 0.0
 _last_manual = {}
 _last_auto = {}
@@ -301,19 +299,6 @@ def delete(uid):
         n = db().execute("DELETE FROM utterances WHERE id=?", (uid,)).rowcount
         db().commit()
     return n
-
-
-def prefs():
-    return {"repeat_enabled": setting("repeat_enabled", "1") == "1",
-            "repeat_minutes": int(setting("repeat_minutes", "10"))}
-
-
-def set_prefs(d):
-    if "repeat_enabled" in d:
-        setting("repeat_enabled", value="1" if d["repeat_enabled"] else "0")
-    if "repeat_minutes" in d:
-        setting("repeat_minutes", value=str(max(1, min(240, int(d["repeat_minutes"])))))
-    return prefs()
 
 
 def voice_for_project(project):
@@ -583,8 +568,8 @@ def speak(job):
 
 
 def drain_inbox():
-    """Speak everything undismissed, oldest first. No cap: a message repeats
-    until you dismiss it, and dismissing is how you make it stop."""
+    """Speak everything undismissed, oldest first. No cap: you asked for the
+    inbox, so you get all of it."""
     with _db_lock:
         rows = db().execute(
             "SELECT id,audio FROM utterances WHERE dismissed=0 "
@@ -594,15 +579,6 @@ def drain_inbox():
             continue                           # audio expired; text still kept
         play_pcm(blob[44:])                    # strip the 44-byte WAV header
         mark_played([uid])
-
-
-def queue_drain():
-    """Every drain goes through here so the repeater can see one is already
-    queued or speaking. A drain runs for as long as it takes to say everything,
-    which is easily longer than the poll interval."""
-    global _drain_pending
-    _drain_pending += 1
-    submit({"kind": "drain"})
 
 
 def maintenance():
@@ -627,29 +603,6 @@ def maintenance():
                 log(f"maintenance: dropped {before - after}, vacuumed")
         except Exception as exc:
             log(f"maintenance: {type(exc).__name__}: {exc}")
-
-
-def repeater():
-    """Drain the inbox every N minutes, timed from the end of the last drain.
-
-    Deliberately coarse. Timing it from each message's arrival instead meant a
-    busy inbox never repeated at all, because new arrivals kept pushing the
-    clock forward. Paused while muted: mute means make no noise, and a
-    reminder is noise."""
-    while True:
-        time.sleep(15)
-        try:
-            p = prefs()
-            if not p["repeat_enabled"] or is_muted() or not pending_count():
-                continue
-            if _drain_pending:                 # already queued or speaking
-                continue
-            if time.time() - _last_drain_end < p["repeat_minutes"] * 60:
-                continue
-            log(f"repeating {pending_count()} undismissed")
-            queue_drain()
-        except Exception as exc:
-            log(f"repeater: {type(exc).__name__}: {exc}")
 
 
 def is_speaking():
@@ -682,18 +635,11 @@ def hold_floor(seconds):
 def worker():
     """Single consumer: overlapping notifications queue up instead of talking
     over each other."""
-    global _last_drain_end, _drain_pending
     while True:
         job, done = _jobs.get()
         try:
             if job.get("kind") == "drain":
-                try:
-                    drain_inbox()
-                finally:
-                    # Stamp at the end, so the next repeat is N minutes after
-                    # this one stopped talking rather than after it started.
-                    _last_drain_end = time.time()
-                    _drain_pending = max(0, _drain_pending - 1)
+                drain_inbox()
             elif job.get("kind") == "replay":
                 blob = audio_of(job["id"])
                 if blob:
@@ -751,7 +697,7 @@ def handle(conn):
             return reply({"ok": True, "muted": is_muted()})
 
         if req.get("play_pending"):
-            queue_drain()
+            submit({"kind": "drain"})
             return reply({"ok": True})
 
         if req.get("replay"):
@@ -799,14 +745,10 @@ def handle(conn):
             n = dismiss(None if req["dismiss"] is True else [req["dismiss"]])
             return reply({"ok": True, "dismissed": n})
 
-        if req.get("prefs") is not None:
-            p = set_prefs(req["prefs"]) if req["prefs"] else prefs()
-            return reply({"ok": True, **p})
-
         if req.get("status"):
             return reply({"ok": True, "muted": is_muted(),
                           "pending": pending_count(),
-                          "ui": f"http://{HOST}:{UI_PORT}", **prefs()})
+                          "ui": f"http://{HOST}:{UI_PORT}"})
 
         label, voice = resolve_session(req.get("session") or "", req.get("cwd"))
 
@@ -939,7 +881,7 @@ class UI(BaseHTTPRequestHandler):
         if self.path == "/api/status":
             return self._send(200, "application/json", json.dumps(
                 {"muted": is_muted(), "pending": pending_count(),
-                 "speaking": is_speaking(), **prefs()}).encode())
+                 "speaking": is_speaking()}).encode())
         if self.path == "/api/sessions":
             return self._send(200, "application/json",
                               json.dumps(list_sessions()).encode())
@@ -1015,7 +957,7 @@ class UI(BaseHTTPRequestHandler):
             stop_current()
             return self._send(200, "application/json", b'{"ok":true}')
         if self.path == "/api/drain":
-            queue_drain()
+            submit({"kind": "drain"})
             return self._send(200, "application/json", b'{"ok":true}')
         if self.path == "/api/floor":
             n = int(self.headers.get("Content-Length") or 0)
@@ -1051,11 +993,6 @@ class UI(BaseHTTPRequestHandler):
         if self.path.startswith("/api/delete/"):
             return self._send(200, "application/json", json.dumps(
                 {"deleted": delete(os.path.basename(self.path[12:]))}).encode())
-        if self.path == "/api/prefs":
-            n = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(n) or b"{}")
-            return self._send(200, "application/json",
-                              json.dumps(set_prefs(body)).encode())
         if self.path.startswith("/api/heard/"):
             mark_played([os.path.basename(self.path[len("/api/heard/"):])])
             return self._send(200, "application/json", b'{"ok":true}')
@@ -1089,9 +1026,9 @@ def main():
     # Exactly one daemon, whoever starts it. `say` auto-starts one when it
     # cannot connect, and a systemd restart leaves a ~14s window with no
     # socket, so a hook firing in that window used to spawn a second daemon.
-    # It would then unlink and steal the socket while the first kept its own
-    # repeater running — two processes speaking over each other. Taken before
-    # the model loads, so the loser costs nothing.
+    # It would then unlink and steal the socket while the first kept draining
+    # its own queue — two processes speaking over each other. Taken before the
+    # model loads, so the loser costs nothing.
     lock = open(os.path.join(STATE, "daemon.lock"), "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1129,13 +1066,8 @@ def main():
     if n:
         log(f"released {n} stale session(s) older than 24h")
 
-    global _last_drain_end
-    _last_drain_end = time.time()   # don't nag the instant the daemon restarts
-    threading.Thread(target=repeater, daemon=True).start()
     threading.Thread(target=maintenance, daemon=True).start()
-    p = prefs()
-    log(f"ready on {SOCKET_PATH} (muted={is_muted()}, inbox={pending_count()}, "
-        f"repeat={'every %dm' % p['repeat_minutes'] if p['repeat_enabled'] else 'off'})")
+    log(f"ready on {SOCKET_PATH} (muted={is_muted()}, inbox={pending_count()})")
 
     try:
         while True:

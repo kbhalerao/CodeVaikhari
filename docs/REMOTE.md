@@ -74,8 +74,8 @@ Chosen direction: **Web Push + PWA**, self-contained, no third party.
 - Service worker `push` handler shows the notification; `notificationclick`
   focuses the inbox. Actions for *Dismiss* and *Play* go straight to the API.
 - The daemon posts to each subscription when a message arrives and is not
-  dismissed. Reuse the repeat interval so a phone re-notifies on the same
-  schedule the speakers re-speak.
+  dismissed. Once per message; the desk speakers say a thing once, and a
+  phone that re-notifies on a timer is a different product.
 - **iOS caveat:** web push only works once the PWA is installed to the home
   screen. That is a manual, non-obvious step and should be called out in the
   UI rather than left to fail silently.
@@ -91,8 +91,7 @@ playback and routes to the phone.
 
 Mechanically this is the existing mute path plus a delivery target: messages
 still synthesize and still land in the inbox undismissed, they just do not
-reach the speakers. Repeat should keep running when away — the reminder goes
-out as a push instead of as sound.
+reach the speakers. The push goes out in place of the sound.
 
 **Not worth building yet.** Until a remote consumer exists, away mode is
 indistinguishable from `say --mute`, so building it now would add a second

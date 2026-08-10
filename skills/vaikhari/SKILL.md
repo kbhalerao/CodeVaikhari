@@ -40,7 +40,7 @@ Read the file that matches the question. Don't read them all.
 
 | Question | File |
 |---|---|
-| Muting, what the inbox holds, why a message did or didn't clear itself, `--dismiss` vs `--dismiss-session`, repeat, retention | `reference/inbox.md` |
+| Muting, what the inbox holds, why a message did or didn't clear itself, `--dismiss` vs `--dismiss-session`, retention | `reference/inbox.md` |
 | Which hook does what, how a project gets its voice, pinning, and closing a session down | `reference/sessions.md` |
 | Two voices talking over each other, nothing plays, a session speaking in the wrong voice, reading the database | `reference/diagnostics.md` |
 

@@ -53,7 +53,7 @@ sqlite3 ~/.local/state/vaikhari/vaikhari.db \
 | `utterances` | text, metadata, audio as a BLOB |
 | `sessions` | session id, label, project, cwd, voice, start/end |
 | `voices` | the sticky project → voice cache, and pins |
-| `settings` | mute, repeat interval |
+| `settings` | mute, UI token |
 
 Rows are written **when playback ends**, so `ts` deltas minus `dur` give the
 real silence between utterances — not the `ts` deltas themselves.
@@ -75,5 +75,4 @@ Editing `vaikharid.py` or `say` does.
 
 ```bash
 say -o /tmp/out.wav "text"
-say --repeat 1               # exercise the repeat loop in ~60 s; put it back to 10
 ```

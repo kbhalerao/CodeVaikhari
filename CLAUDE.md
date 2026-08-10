@@ -36,9 +36,9 @@ Break these and the thing stops being useful:
    The serial queue only helps if one process owns it. `say` auto-starts a
    daemon when it cannot connect, and a restart leaves a ~14 s window with no
    socket, so a hook firing then used to start a second daemon which stole the
-   socket while the first kept its own repeater running — two processes
-   talking over each other. An `flock` on `daemon.lock`, taken before the
-   model loads, is what actually guarantees serial output.
+   socket while the first kept its own queue draining — two processes talking
+   over each other. An `flock` on `daemon.lock`, taken before the model loads,
+   is what actually guarantees serial output.
 
    `VAIKHARI_TRACE=1` logs every playback start and end with pid and thread.
    Overlap cannot be diagnosed after the fact; reach for this first.
@@ -67,7 +67,7 @@ Break these and the thing stops being useful:
    design, not a notifier's.
 
 6. **`dismissed` and `played` are separate axes.** Heard-but-not-acted-on
-   still sits in the inbox. Conflating them breaks repeat.
+   still sits in the inbox. Conflating them empties it too early.
 
 7. **Off loopback, the UI requires a token** (`VAIKHARI_NO_AUTH=1` opts out
    for a trusted network, and the daemon then warns at every start). Bind and
@@ -124,7 +124,7 @@ about timing and sound. Verify by hand, and prefer checking the database over
 trusting the logs:
 
 ```bash
-say --status                      # muted, pending, repeat interval
+say --status                      # muted, pending, UI url
 say --sessions                    # who holds which voice
 
 sqlite3 ~/.local/state/vaikhari/vaikhari.db \
@@ -135,9 +135,6 @@ Synthesize without making noise: `say -o /tmp/out.wav "text"`.
 
 When testing timing, remember rows are written **when playback ends**, so
 `ts` deltas minus `dur` give the real silence between utterances.
-
-Set `say --repeat 1` to exercise the repeat loop in ~60 s rather than 10 min,
-and put it back to 10 afterwards.
 
 ## Style
 

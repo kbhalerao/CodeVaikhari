@@ -76,16 +76,6 @@ aside{background:var(--panel);border-right:1px solid var(--line);
 .hear:hover{border-color:var(--accent);color:var(--accent)}
 .none{color:var(--faint);font-size:12.5px;padding:10px 6px}
 
-/* ---------------------------------------------------------- prefs */
-.prefs{border-top:1px solid var(--line);padding:0 18px 16px;background:var(--panel)}
-.pref{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--dim);
-  padding:7px 0}
-.pref label{display:flex;align-items:center;gap:8px;cursor:pointer;flex:1}
-.pref input[type=number]{width:52px;background:var(--bg);border:1px solid var(--line);
-  border-radius:7px;padding:4px 6px;font-size:12.5px;text-align:center}
-.pref .hint{font-size:11px;color:var(--faint);line-height:1.4;padding-bottom:4px}
-input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px}
-
 /* ---------------------------------------------------------- main */
 main{display:flex;flex-direction:column;min-width:0;min-height:0}
 .top{display:flex;align-items:center;gap:14px;padding:18px 24px 14px;
@@ -169,7 +159,6 @@ audio{grid-column:1;height:32px;width:100%;max-width:380px}
   .acts{grid-column:1;grid-row:auto;flex-direction:row;margin-top:8px}
   .dismiss,.del{flex:1}
   audio{max-width:100%}
-  .prefs{padding:0 14px 14px}
 }
 </style></head><body>
 
@@ -192,16 +181,6 @@ audio{grid-column:1;height:32px;width:100%;max-width:380px}
 
     <div class="sec">Sessions</div>
     <div class="scroll" id="sessions"></div>
-
-    <div class="prefs">
-      <div class="sec" style="border:0;padding-left:0;padding-right:0">Preferences</div>
-      <div class="pref">
-        <label><input type="checkbox" id="rep"> Repeat undismissed</label>
-        <input type="number" id="repmin" min="1" max="240" step="1">
-        <span>min</span>
-      </div>
-      <div class="hint" id="rephint"></div>
-    </div>
   </aside>
 
   <main>
@@ -340,15 +319,6 @@ async function refresh() {
   $('st').innerHTML = st.speaking ? '<span class="speaking"><i></i>speaking</span>'
                     : (st.muted ? 'queueing silently' : 'idle');
 
-  if (document.activeElement !== $('repmin')) {
-    $('rep').checked = st.repeat_enabled;
-    $('repmin').value = st.repeat_minutes;
-  }
-  $('rephint').textContent = st.repeat_enabled
-    ? `Undismissed messages are re-spoken every ${st.repeat_minutes} min` +
-      (st.muted ? ', paused while muted.' : '.')
-    : 'Messages are spoken once and then wait here.';
-
   // Cheap change-detection so the DOM (and any playing audio) is left alone
   // when nothing has actually changed.
   const next = JSON.stringify([items.map(i => [i.id, i.dismissed, i.played]),
@@ -417,9 +387,6 @@ $('dismissAll').onclick = async () => {
   await busy($('dismissAll'), () => post('/api/dismiss-all'));
   sig = ''; refresh();
 };
-$('rep').onchange      = async () => { await post('/api/prefs', {repeat_enabled: $('rep').checked}); sig = ''; refresh(); };
-$('repmin').onchange   = async () => { await post('/api/prefs', {repeat_minutes: +$('repmin').value}); sig = ''; refresh(); };
-
 // Rail state is a preference, so it survives a reload and the 2s refresh.
 const app = document.querySelector('.app');
 function setRail(collapsed) {

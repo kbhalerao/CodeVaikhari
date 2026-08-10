@@ -9,7 +9,7 @@ things:
 - `dismissed` — you have dealt with it.
 
 Heard but not acted on is the normal state of a useful notification, so it
-stays in the inbox. Anything that conflates the two breaks repeat.
+stays in the inbox. Anything that conflates the two empties it too early.
 
 ## Muting
 
@@ -20,8 +20,7 @@ say --status    # muted? how many waiting? UI url
 say --inbox     # speak what is waiting, now
 ```
 
-Mute does not drop messages, it queues them. Repeat pauses while muted, since
-a reminder is also noise.
+Mute does not drop messages, it queues them.
 
 Muted messages have `played=0`, which is what keeps them safe from the
 auto-dismissal below.
@@ -46,19 +45,6 @@ say --dismiss            # everything waiting, all sessions
 These are deliberately separate flags. Session defaults from
 `CLAUDE_CODE_SESSION_ID`, so overloading `--dismiss` would silently narrow it
 whenever it ran inside a session.
-
-## Repeat
-
-```bash
-say --repeat 10     # re-speak undismissed messages every 10 minutes
-say --no-repeat
-say --repeat 1      # for testing: exercises the loop in ~60 s. Put it back.
-```
-
-The clock runs from the newest undismissed message *or* the last repeat,
-whichever is later, so nothing is nagged sooner than a full interval after it
-arrives. One repeat reads at most 5 messages, then says how many more are
-stacked up.
 
 ## Not saying it twice
 

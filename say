@@ -12,7 +12,6 @@
   say --inbox                     speak the inbox now
   say --dismiss                   dismiss everything waiting
   say --dismiss-session           dismiss this session's played messages
-  say --repeat 10 / --no-repeat   re-speak undismissed messages every N minutes
   say --status                    muted? how many waiting? UI url
   say --stop                      shut it up
   say --voices                    list all 28 English voices
@@ -144,7 +143,7 @@ def main(argv):
         elif a in ("--stop", "--mute", "--unmute", "--inbox", "--status",
                    "--ui", "--voices", "--sessions", "--register",
                    "--unregister", "--preview", "--pin", "--unpin", "--pins",
-                   "--dismiss", "--repeat", "--no-repeat", "--dismiss-session"):
+                   "--dismiss", "--dismiss-session"):
             action = a
         elif a in ("-h", "--help"):
             print(__doc__); return 0
@@ -162,10 +161,8 @@ def main(argv):
         send({"play_pending": True, "wait": wait}); return 0
     if action == "--status":
         r = send({"status": True})
-        rep = (f"repeat every {r['repeat_minutes']}m" if r.get("repeat_enabled")
-               else "repeat off")
         print(f"{'muted' if r['muted'] else 'unmuted'}, "
-              f"{r['pending']} waiting, {rep}  |  {r['ui']}")
+              f"{r['pending']} waiting  |  {r['ui']}")
         return 0
     if action == "--dismiss-session":
         # Deliberately a separate flag from --dismiss: `session` now defaults
@@ -177,15 +174,6 @@ def main(argv):
         return 0
     if action == "--dismiss":
         print(f"dismissed {send({'dismiss': True})['dismissed']}")
-        return 0
-    if action == "--repeat":
-        mins = int(words[0]) if words else 10
-        r = send({"prefs": {"repeat_enabled": True, "repeat_minutes": mins}})
-        print(f"repeating every {r['repeat_minutes']} min")
-        return 0
-    if action == "--no-repeat":
-        send({"prefs": {"repeat_enabled": False}})
-        print("repeat off")
         return 0
     if action == "--ui":
         subprocess.Popen(["xdg-open", UI_URL], stdout=subprocess.DEVNULL,
